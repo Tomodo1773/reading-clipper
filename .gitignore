@@ -1,0 +1,21 @@
+# Local secrets and environment values
+.env
+.env.*
+!.env.example
+
+# Cloudflare / OpenTofu local state
+.wrangler/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Local tooling
+.DS_Store
+Thumbs.db

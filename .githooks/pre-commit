@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+
+agents_sha=$(git rev-parse :AGENTS.md 2>/dev/null || true)
+claude_sha=$(git rev-parse :CLAUDE.md 2>/dev/null || true)
+
+if [ -z "$agents_sha" ] || [ -z "$claude_sha" ] || [ "$agents_sha" != "$claude_sha" ]; then
+  echo "AGENTS.md and CLAUDE.md must be staged and identical." >&2
+  exit 1
+fi
+
