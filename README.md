@@ -31,7 +31,7 @@ Slack
 
 受付WorkerはSlackの署名を検証し、処理内容をCloudflare Queueへ登録して3秒以内にHTTP応答する。本文取得、AI要約、GitHub保存はQueueを受け取る処理Workerが行う。
 
-受付と処理は論理的に分離する。別々のWorkerとしてデプロイするか、1つのWorkerにHTTP用とQueue用のハンドラーを持たせるかは、実装時に決める。
+受付と処理は論理的に分離するが、デプロイ単位は1つのWorkerとし、`fetch` ハンドラーと `queue` ハンドラーを同居させる。個人開発の規模では、secretsとデプロイ経路を1系統に保てる利点が、デプロイ単位を分ける利点を上回るため。
 
 実装言語はTypeScriptとする。受付WorkerのHTTP処理にはHonoを使い、Queue処理はCloudflare Workersの `queue` handlerとして直接実装する。
 
@@ -49,28 +49,48 @@ GitHubは、長期稼働する外部連携にはGitHub Appを推奨し、PATはA
 
 ## インフラ管理とデプロイ
 
-Cloudflareのインフラ管理にはOpenTofuとCloudflare Providerを使用する。OpenTofuの実行は自動化せず、ローカルから `tofu plan` と `tofu apply` を実行する。
-
-管理対象を次のように分ける。
+Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管理する。OpenTofuは使用しない。
 
 | 対象 | 管理方法 |
 |---|---|
-| Cloudflare Queueなど、Workerコードから独立した基盤 | OpenTofu |
-| Workerコード、Queue bindings、Queue consumer設定 | Git管理された `wrangler.jsonc` とWrangler |
+| Workerコード、Queue bindings、Queue consumer設定、observability | Git管理された `wrangler.jsonc` とWrangler |
+| Queue本体とdead letter queue | `wrangler queues create` で作成する |
+| AI Gateway | `scripts/setup-ai-gateway.ts`（Cloudflare APIを呼ぶ冪等スクリプト） |
+| runtime secrets | ローカルからWranglerで登録し、Gitには保存しない |
+| Gemini APIキー | AI GatewayのBYOK。Secrets Storeへ登録し、Workerには持たせない |
 | WorkerのCI | GitHub Actions |
 | Workerのデプロイ | Cloudflare Workers BuildsのGitHub連携 |
-| runtime secrets | ローカルからWranglerで登録し、GitやOpenTofu stateには保存しない |
-| custom domainとWorkerの接続 | アプリとは別のprivateなOpenTofu stack |
+| Workers BuildsのGit連携 | ダッシュボードでの手動接続（コード化する手段が存在しない） |
+| custom domainとWorkerの接続 | アプリとは別の非公開な場所で管理する |
+
+### OpenTofuを使わない理由
+
+初期検討ではCloudflare基盤をOpenTofuで管理する想定だったが、Cloudflare Provider v5を調査した結果、採用しない判断に切り替えた。
+
+- `cloudflare_workers_script` はコード本体とbindingsを必須属性として持つため、Workers Buildsによるデプロイと衝突する。コードを持たない `cloudflare_worker` も、`observability` など `wrangler.jsonc` と同じキーを持ち、deploy時に上書きされるので二重管理になる。
+- 結果としてOpenTofuの管理対象はQueue、dead letter queue、AI Gatewayの3つに限られる。この3つのために、state保存先のR2バケット、S3互換APIトークン、state暗号化のpassphrase管理と紛失対策、バックアップ運用を恒久的に抱えることになり、規模に見合わない。
+- Wranglerへ寄せたときに残る穴はAI Gatewayだけで（Wranglerにコマンドが無い）、これは冪等なスクリプト1本でコード化できる。
+- Workers BuildsのGit連携は、どちらの方式でもコード化できない。Cloudflare Providerが未対応で、ダッシュボードでの手動接続が必要になる。この制約はOpenTofuを採用しても解消しない。
+
+### 認証情報の受け渡し
+
+AI Gatewayは認証必須（Authenticated Gateway）にする。Workerは `cf-aig-authorization` ヘッダーにトークンを付けて呼ぶ。
+
+このトークンは `AI Gateway Run` 権限のCloudflare API tokenで、発行時に一度しか表示されない。取得を自動化するとスクリプトの出力やCIログに残るため、発行はダッシュボードで手動で行い、`wrangler secret put` でWorkerへ登録する。IaCの有無にかかわらず、この値を自動で受け渡すことはできない。
+
+なおこのトークンはゲートウェイ単位に絞れない。`Run` 権限はアカウント内の全ゲートウェイに及ぶ。
+
+Gemini APIキーはSecrets Store経由のBYOKにする。シークレット名は `{gateway_id}_{provider_slug}_{alias}` 形式が必須で、登録後はWorkerがGeminiのAPIキーを持つ必要がなくなる。
+
+### デプロイ
 
 CIはGitHub Actionsで実行し、依存取得にはSocket Firewallを使う。デプロイはCloudflare Workers BuildsのGitHub連携を使い、production branchへのpushで自動実行する。
 
 production branchへの直接pushは禁止し、CIを必須checkにする。これにより、CIを通過してmergeされた変更だけがGit連携からデプロイされる。
 
-Workers Builds内の依存取得にはSocket Firewallを使わない。これは共通ポリシーの明示的な例外とし、専用リポジトリの `AGENTS.md` と `CLAUDE.md` に理由を記録する。lockfileを必須とし、使用するpackage managerでlockfileの変更を拒否するinstall commandを設定する。
+Workers Builds内の依存取得にはSocket Firewallを使わない。これは共通ポリシーの明示的な例外とし、`AGENTS.md` と `CLAUDE.md` に理由を記録する。install commandは `pnpm install --frozen-lockfile` とし、lockfileの変更を拒否する。
 
-OpenTofuとWranglerで同じリソースを重複管理しない。OpenTofuのstateをどこに保存・バックアップするかは、実装前に決める。
-
-アプリのリポジトリにはcustom domainやroute設定を置かない。別のOpenTofu stackではドメインを変数として受け取り、実値はローカルの環境変数またはGit管理外の `.tfvars` から渡す。ドメイン値はOpenTofu stateに記録されるため、stateはGitへcommitせず、非公開かつ暗号化された場所に保存する。
+アプリのリポジトリにはcustom domainやroute設定を置かない。ドメインの実値はGit管理外から渡す。
 
 ## 個人開発の共通ポリシー
 
@@ -81,8 +101,8 @@ OpenTofuとWranglerで同じリソースを重複管理しない。OpenTofuのst
 今回のリポジトリでは、少なくとも次が対象になる。
 
 - `AGENTS.md` と `CLAUDE.md` を別ファイルかつ同一内容で管理し、pre-commit hookとCIで同期を検証する。
-- 使用するpackage managerのversionをmanifestで固定し、lockfileを管理する。ローカルとCIの依存取得・更新はSocket Firewall経由にする。
-- pnpmを選ぶ場合は、公開直後version除外、依存build script制御、lockfile信頼設定を共通ポリシーどおり適用する。
+- package managerはpnpmとし、versionを `package.json` の `packageManager` で固定する。CIはその指定を参照し、別途versionを書かない。ローカルとCIの依存取得・更新はSocket Firewall経由にする。
+- 公開直後version除外、依存build script制御、lockfile信頼設定を `pnpm-workspace.yaml` に適用する。
 - 使用するpackage ecosystemとGitHub ActionsをDependabotの対象にし、更新間隔とcooldownを共通ポリシーに合わせる。
 - GitHub Actionsは完全長commit SHAに固定し、`GITHUB_TOKEN` を必要最小権限にする。
 
@@ -90,15 +110,22 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 
 ## 実装手順
 
-1. OpenTofuで管理する基盤のIACを書く。
+1. プロジェクトの足場、`wrangler.jsonc`、AI Gatewayセットアップスクリプトを書く。
 2. TypeScript、Hono、Queue consumerのアプリコードを書く。
 3. 保存先private repository用のGitHub Appを作成してインストールする。
 4. X APIキーを用意する。
 5. Firecrawl APIキーを取得する。
-6. Gemini APIキーを用意し、AI GatewayのBYOKへ登録する。
+6. Gemini APIキーを用意する。
 7. Slack App/Botを作成し、URLを受け付ける設定を用意する。
-8. CloudflareやGitHub Appなどの認証情報をローカル環境変数に設定し、IACをprovisionする。runtime secretsはWranglerで登録する。
-9. ソースコードをpublic GitHub repositoryへpushし、CI通過後にCloudflare Workers BuildsのCDでデプロイする。
+8. Cloudflareのリソースを用意する。
+   1. `pnpm wrangler queues create reading-clipper-clips` と `pnpm wrangler queues create reading-clipper-clips-dlq`
+   2. `CLOUDFLARE_ACCOUNT_ID` と `CLOUDFLARE_API_TOKEN` を設定して `pnpm setup:aigw` を実行し、AI Gatewayを作成する。
+   3. AI Gatewayの認証トークンをダッシュボードで発行する。表示は一度きり。
+   4. Gemini APIキーをSecrets Storeへ登録する（BYOK）。
+   5. runtime secretsを `pnpm wrangler secret put <NAME>` で登録する。対象は `src/types.ts` の `Env` を参照する。
+9. ソースコードをpublic GitHub repositoryへpushする。
+10. CloudflareダッシュボードでWorkers BuildsのGit連携を手動で接続する。
+11. CI通過後、production branchへのmergeでWorkers Buildsがデプロイする。
 
 ## URL別の取得方針
 
@@ -149,8 +176,7 @@ Geminiのモデルとプロンプトは、実際の記事を使った出力比�
 - 同じURLが再度送られた場合の扱い
 - 取得、要約、GitHub保存のどこかが失敗した場合の扱い
 - 2〜4文要約の品質基準と評価方法
-- Queue処理が失敗した場合の再試行と通知
-- OpenTofu stateの保存先とバックアップ方法
+- Queue処理が失敗した場合の再試行と通知、およびdead letter queueに溜まったメッセージの扱い
 
 これらは実装時に都合のよい方式を先に置かず、利用例、制約、費用を確認してから決める。
 
@@ -169,17 +195,17 @@ Geminiのモデルとプロンプトは、実際の記事を使った出力比�
 - [X API Overview](https://docs.x.com/x-api/overview)
 - [Slack Events API](https://docs.slack.dev/apis/events-api/) — イベント受信側は3秒以内にHTTP応答する必要があるため、本文取得や要約を同じリクエストの完了まで待たせない
 - [Cloudflare Queues](https://developers.cloudflare.com/queues/) — HTTP応答と本文取得・要約処理を分離する
-- [Cloudflare QueueのTerraform resource](https://developers.cloudflare.com/api/terraform/resources/queues/)
-- [Cloudflare Worker custom domainのTerraform resource](https://developers.cloudflare.com/api/terraform/resources/workers/)
-- [OpenTofu FAQ](https://opentofu.org/faq/) — 既存のTerraform Providerを利用できる
-- [OpenTofu input variables](https://opentofu.org/docs/language/values/variables/) — 環境変数や `.tfvars` から値を渡せる
-- [OpenTofu state encryption](https://opentofu.org/docs/language/state/encryption/)
-- [Cloudflare Workers BuildsのGit連携](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/)
+- [Cloudflare Queuesの設定](https://developers.cloudflare.com/queues/configuration/configure-queues/) — `dead_letter_queue`、`max_batch_size`、`max_retries` をWrangler設定ファイルに書ける
+- [Wrangler queuesコマンド](https://developers.cloudflare.com/workers/wrangler/commands/queues/) — Queue本体の作成・更新
+- [Cloudflare Workers BuildsのGit連携](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/) — 接続はダッシュボードでの手動操作のみ
+- [Cloudflare Provider issue #6924](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6924) — Workers BuildsのGit連携はTerraformで管理できない
 - [Cloudflare Workers Buildsの設定](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)
 - [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/) — Worker bindingsのsource of truth
 - [Cloudflare Workers Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
 - [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/usage/rest-api/)
-- [Cloudflare AI Gateway Logging](https://developers.cloudflare.com/ai-gateway/observability/logging/)
+- [Cloudflare AI Gateway Logging](https://developers.cloudflare.com/ai-gateway/observability/logging/) — プロンプトと応答本文の保存は既定で有効
+- [Cloudflare AI Gateway Authentication](https://developers.cloudflare.com/ai-gateway/configuration/authentication/) — トークンは `AI Gateway Run` 権限のAPI tokenで、表示は一度きり
+- [Cloudflare AI Gateway BYOK](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/) — シークレット名は `{gateway_id}_{provider_slug}_{alias}` 形式
 - [Cloudflare AI Gateway OpenTelemetry](https://developers.cloudflare.com/ai-gateway/observability/otel-integration/)
 - [Cloudflare Workers Web Crypto](https://developers.cloudflare.com/workers/runtime-apis/web-crypto/) — GitHub AppのJWT署名に必要なRSA署名を利用できる
 - [Hono on Cloudflare Workers](https://hono.dev/docs/getting-started/cloudflare-workers)

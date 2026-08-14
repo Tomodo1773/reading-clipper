@@ -1,0 +1,19 @@
+{
+  // Node上で動くセットアップスクリプト用。Worker側は src/tsconfig.json を使う。
+  // Workersのグローバル型とNodeの型は fetch や Request の定義が衝突するため、分けている。
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["scripts/**/*.ts"]
+}

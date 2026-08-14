@@ -1,0 +1,18 @@
+{
+  // Cloudflare Workers上で動くコード用。
+  // worker-configuration.d.ts は `wrangler types` が wrangler.jsonc から生成する。
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["**/*.ts", "../worker-configuration.d.ts"]
+}

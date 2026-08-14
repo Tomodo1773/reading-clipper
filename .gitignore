@@ -3,13 +3,15 @@
 .env.*
 !.env.example
 
-# Cloudflare / OpenTofu local state
+# Cloudflare Workers local state
 .wrangler/
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
-*.tfvars.json
+
+# `wrangler dev` がローカルのsecretを読む場所
+.dev.vars
+.dev.vars.*
+
+# `wrangler types` が wrangler.jsonc から生成する
+worker-configuration.d.ts
 
 # Dependencies and build output
 node_modules/

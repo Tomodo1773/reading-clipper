@@ -1,0 +1,14 @@
+# 共通ポリシー 2.6: 依存パッケージのインストール時スクリプトは既定で実行しない。
+# esbuild と workerd は事前ビルド済みバイナリを optionalDependencies で配るため、
+# スクリプトを実行しなくても動作する。
+allowBuilds:
+  esbuild: false
+  workerd: false
+
+# 共通ポリシー 2.2: 公開から7日未満のバージョンを依存解決の候補から除外する。
+minimumReleaseAge: 10080
+
+# 共通ポリシー 2.7: セキュリティ更新にはクールダウンを適用しないため、
+# lockfile には minimumReleaseAge を満たさないエントリが正当に入る。
+# インストールのたびに再検証すると、その修正が遅延する。
+trustLockfile: true

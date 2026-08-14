@@ -1,9 +1,49 @@
 version: 2
 updates:
+  - package-ecosystem: npm
+    directory: /
+    open-pull-requests-limit: 2
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    labels:
+      - dependencies
+      - npm
+    groups:
+      npm-version:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    commit-message:
+      prefix: deps
+      prefix-development: deps
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
-
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      github-actions-version:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    commit-message:
+      prefix: deps(github-actions)
+      prefix-development: deps(github-actions)

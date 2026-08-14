@@ -1,0 +1,22 @@
+{
+  "name": "reading-clipper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.15.1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types",
+    "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p src/tsconfig.json",
+    "setup:aigw": "node --experimental-strip-types scripts/setup-ai-gateway.ts"
+  },
+  "dependencies": {
+    "hono": "^4.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26",
+    "typescript": "^7",
+    "wrangler": "^4.119.0"
+  }
+}

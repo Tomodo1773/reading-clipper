@@ -14,9 +14,38 @@
 - README.mdに記載された共通ポリシーと設計上の未決事項を、実装前に確認してください。
 - 依存関係の取得・更新は、Socket Firewall（`sfw`）経由で実行します。lockfileを管理し、CIではlockfileを変更しません。
 
+## 開発
+
+package managerはpnpmで、versionは `package.json` の `packageManager` で固定しています。CI側に別途versionを書かないでください。
+
+| 目的 | コマンド |
+|---|---|
+| 依存の取得 | `sfw pnpm install` |
+| 型検査 | `pnpm typecheck` |
+| Worker設定の検証 | `pnpm wrangler deploy --dry-run` |
+| ローカル起動 | `pnpm dev` |
+| AI Gatewayの作成・更新 | `pnpm setup:aigw` |
+
+`pnpm typecheck` は `wrangler types` で `worker-configuration.d.ts` を生成してから、スクリプト用（`tsconfig.json`）とWorker用（`src/tsconfig.json`）の2つを検査します。Workersのグローバル型とNodeの型は `fetch` などの定義が衝突するため、意図的に分けています。
+
+`pnpm setup:aigw` には `CLOUDFLARE_ACCOUNT_ID` と、`AI Gateway Read` / `AI Gateway Write` 権限を持つ `CLOUDFLARE_API_TOKEN` が必要です。
+
+依存を追加・更新するとき、共通ポリシーにより公開から7日未満のバージョンは除外されます。`ERR_PNPM_NO_MATURE_MATCHING_VERSION` はこの設定が正しく働いた結果です。設定を緩めて回避せず、7日以上前に公開されたバージョンを指定してください。
+
+## インフラ管理
+
+Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管理します。OpenTofuは使用しません。判断の根拠はREADME.mdの「OpenTofuを使わない理由」に記録しています。
+
+AI GatewayだけはWranglerにコマンドが無いため、`scripts/setup-ai-gateway.ts` がCloudflare APIを直接呼びます。設定を変えるときは、ダッシュボードではなくこのスクリプトを編集してください。ゲートウェイのIDは `wrangler.jsonc` の `vars.AI_GATEWAY_ID` と一致させる必要があります。
+
+## 共通ポリシーの例外
+
+Cloudflare Workers Builds内の依存取得にはSocket Firewallを使いません。ビルド環境に `sfw` が用意されておらず、導入するには生のpackage managerを使うことになり、かえってポリシーに反するためです。
+
+代わりにlockfileを必須とし、install commandを `pnpm install --frozen-lockfile` にしてlockfileの変更を拒否します。ローカルとGitHub ActionsのCIでは従来どおり `sfw` を経由します。
+
 ## 指示ファイルの同期
 
 `AGENTS.md` と `CLAUDE.md` はシンボリックリンクではない別ファイルとして管理します。内容は完全に一致させ、片方を変更したらもう片方も同じ内容に更新してください。
 
 同期は `.githooks/pre-commit` と GitHub Actions のCIで検証します。ローカルでは `git config core.hooksPath .githooks` を設定してください。
-
