@@ -32,9 +32,15 @@ package managerはpnpmで、versionは `package.json` の `packageManager` で�
 
 依存を追加・更新するとき、共通ポリシーにより公開から7日未満のバージョンは除外されます。`ERR_PNPM_NO_MATURE_MATCHING_VERSION` はこの設定が正しく働いた結果です。設定を緩めて回避せず、7日以上前に公開されたバージョンを指定してください。
 
+`wrangler.jsonc` の `compatibility_date` は、同梱されるworkerdがサポートする日付以下にしてください。超えると `wrangler dev` が起動しませんが、`deploy --dry-run` は通ってしまうためCIでは検出できません。変更したときは `pnpm dev` が起動することまで確認してください。
+
+## 設計判断の記録
+
+README.mdの方針を変更する判断をしたら、[`docs/adr/`](docs/adr/) にADRを追加してください。README.mdには結論と要約だけを書き、根拠・代替案・その方式で失うものはADR側に置きます。連番は既存の最大値+1です。
+
 ## インフラ管理
 
-Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管理します。OpenTofuは使用しません。判断の根拠はREADME.mdの「OpenTofuを使わない理由」に記録しています。
+Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管理します。OpenTofuは使用しません。判断の根拠と、この方式で失うもの（drift検出など）は [ADR 0001](docs/adr/0001-wrangler-over-opentofu.md) に記録しています。
 
 AI GatewayだけはWranglerにコマンドが無いため、`scripts/setup-ai-gateway.ts` がCloudflare APIを直接呼びます。設定を変えるときは、ダッシュボードではなくこのスクリプトを編集してください。ゲートウェイのIDは `wrangler.jsonc` の `vars.AI_GATEWAY_ID` と一致させる必要があります。
 

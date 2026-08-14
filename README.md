@@ -65,12 +65,9 @@ Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管�
 
 ### OpenTofuを使わない理由
 
-初期検討ではCloudflare基盤をOpenTofuで管理する想定だったが、Cloudflare Provider v5を調査した結果、採用しない判断に切り替えた。
+初期検討ではCloudflare基盤をOpenTofuで管理する想定だったが、Cloudflare Provider v5を調査した結果、採用しない判断に切り替えた。Workerを宣言的に管理するとWorkers Buildsと二重管理になり、それを避けるとOpenTofuの管理対象がQueue、dead letter queue、AI Gatewayの3つだけになる。この3つのためにstate保存先と暗号化の運用を恒久的に抱えるのは規模に見合わない。
 
-- `cloudflare_workers_script` はコード本体とbindingsを必須属性として持つため、Workers Buildsによるデプロイと衝突する。コードを持たない `cloudflare_worker` も、`observability` など `wrangler.jsonc` と同じキーを持ち、deploy時に上書きされるので二重管理になる。
-- 結果としてOpenTofuの管理対象はQueue、dead letter queue、AI Gatewayの3つに限られる。この3つのために、state保存先のR2バケット、S3互換APIトークン、state暗号化のpassphrase管理と紛失対策、バックアップ運用を恒久的に抱えることになり、規模に見合わない。
-- Wranglerへ寄せたときに残る穴はAI Gatewayだけで（Wranglerにコマンドが無い）、これは冪等なスクリプト1本でコード化できる。
-- Workers BuildsのGit連携は、どちらの方式でもコード化できない。Cloudflare Providerが未対応で、ダッシュボードでの手動接続が必要になる。この制約はOpenTofuを採用しても解消しない。
+根拠、検討した代替案、この方式で失うもの（drift検出など）は [ADR 0001](docs/adr/0001-wrangler-over-opentofu.md) に記録している。
 
 ### 認証情報の受け渡し
 
@@ -110,7 +107,9 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 
 ## 実装手順
 
-1. プロジェクトの足場、`wrangler.jsonc`、AI Gatewayセットアップスクリプトを書く。
+完了した項目には末尾に **完了** と記録する。
+
+1. プロジェクトの足場、`wrangler.jsonc`、AI Gatewayセットアップスクリプトを書く。**完了**（[ADR 0001](docs/adr/0001-wrangler-over-opentofu.md)）
 2. TypeScript、Hono、Queue consumerのアプリコードを書く。
 3. 保存先private repository用のGitHub Appを作成してインストールする。
 4. X APIキーを用意する。
@@ -187,6 +186,12 @@ Geminiのモデルとプロンプトは、実際の記事を使った出力比�
 - Slackへ、主な結論と内容を含む2〜4文の要約が返る。
 - Slackの返信から、保存に成功したか失敗したかを判別できる。
 - 取得できなかった内容を、取得できたものとして保存・要約しない。
+
+## 設計判断の記録
+
+この設計書の方針を変更した判断は、[`docs/adr/`](docs/adr/) にADRとして残す。README.mdには結論と要約だけを書き、根拠・代替案・失うものはADR側に置く。
+
+- [ADR 0001: Cloudflareのインフラ管理をOpenTofuではなくWranglerに寄せる](docs/adr/0001-wrangler-over-opentofu.md)
 
 ## 確認済みの外部仕様
 

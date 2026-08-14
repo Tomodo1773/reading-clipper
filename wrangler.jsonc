@@ -2,7 +2,11 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "reading-clipper",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-15",
+  // 同梱されるworkerdがサポートする日付以下にする必要がある。
+  // 超えると `wrangler dev` が "Compatibility date is in the future" で起動しない
+  // （`deploy --dry-run` は通ってしまうのでCIでは検出できない）。
+  // minimumReleaseAge により wrangler は7日以上前のものが入るため、上限は今日より前になる。
+  "compatibility_date": "2026-08-01",
 
   // 受付（HTTP）と処理（Queue consumer）を1つのWorkerに同居させる。
   // 論理的な分離はハンドラー単位で行い、secretsとデプロイ経路を1系統に保つ。
