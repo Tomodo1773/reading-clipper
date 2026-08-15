@@ -471,6 +471,8 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
         url: url.toString(),
         formats: ['markdown'],
         onlyMainContent: true,
+        // onlyMainContentのDOMフィルタを抜けた目次や関連記事を、LLMで落とす。
+        onlyCleanContent: true,
       }),
     },
     // Firecrawl側のtimeoutは既定で60秒。同じ値にすると必ずこちらが先に中断し、

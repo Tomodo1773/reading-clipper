@@ -125,6 +125,7 @@ describe('source fetchers', () => {
       url: 'https://example.com/article',
       formats: ['markdown'],
       onlyMainContent: true,
+      onlyCleanContent: true,
     });
   });
 });
