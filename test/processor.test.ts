@@ -79,12 +79,11 @@ describe('clip processor', () => {
 
     await processClipJob(job, makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), 1);
 
-    expect(savedMarkdown).toContain('slack_event_id: "EvProcess"');
     // 保存先は記事タイトル起点で、URLハッシュは付けない。
     expect(savedPath).toBe('clips/qiita.com/Worker設計.md');
     // フロントマターの直後から本文で、要約や見出しの追加はしない。
     expect(savedMarkdown).toBe(
-      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Worker設計"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nslack_event_id: "EvProcess"\nfetch_complete: true\n---\n\n# Worker設計\n\nQueueで重い処理を分離する。\n`,
+      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Worker設計"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nfetch_complete: true\n---\n\n# Worker設計\n\nQueueで重い処理を分離する。\n`,
     );
     expect(savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
     expect(slackBody?.thread_ts).toBe(job.slackThreadTs);
@@ -121,7 +120,7 @@ describe('clip processor', () => {
 
     await processClipJob(job, makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), 4);
     expect(savedMarkdown).toBe(
-      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Article"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nslack_event_id: "EvProcess"\nfetch_complete: true\n---\n\n# Article\n\nBody\n`,
+      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Article"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nfetch_complete: true\n---\n\n# Article\n\nBody\n`,
     );
     expect(slackText).toContain('要約の方は失敗したけれど');
   });

@@ -14,7 +14,6 @@ export function renderClipMarkdown(options: { job: ClipJob; content: FetchedCont
     ['author', content.author],
     ['published_at', content.publishedAt],
     ['clipped_at', job.receivedAt],
-    ['slack_event_id', job.jobId],
     ['fetch_complete', content.complete],
   ];
   const frontMatter = fields
