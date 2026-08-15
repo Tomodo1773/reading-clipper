@@ -47,7 +47,10 @@ describe('clip processor', () => {
         return jsonResponse({ message: 'Not Found' }, 404);
       }
       if (url === 'https://qiita.com/alice/items/abc.md') {
-        return new Response('# Worker設計\n\nQueueで重い処理を分離する。', { status: 200 });
+        return new Response(
+          '---\ntitle: Worker設計\nauthor: alice\n---\n## 概要\n\nQueueで重い処理を分離する。',
+          { status: 200 },
+        );
       }
       if (url.includes('/compat/chat/completions')) {
         return jsonResponse({
@@ -83,7 +86,7 @@ describe('clip processor', () => {
     expect(savedPath).toBe('clips/qiita.com/Worker設計.md');
     // フロントマターの直後から本文で、要約や見出しの追加はしない。
     expect(savedMarkdown).toBe(
-      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Worker設計"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nfetch_complete: true\n---\n\n# Worker設計\n\nQueueで重い処理を分離する。\n`,
+      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Worker設計"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nfetch_complete: true\n---\n\n## 概要\n\nQueueで重い処理を分離する。\n`,
     );
     expect(savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
     expect(slackBody?.thread_ts).toBe(job.slackThreadTs);
@@ -103,7 +106,9 @@ describe('clip processor', () => {
       if (url.includes('/repos/example/clips/contents/') && method === 'GET') {
         return jsonResponse({}, 404);
       }
-      if (url.endsWith('/abc.md')) return new Response('# Article\n\nBody', { status: 200 });
+      if (url === 'https://qiita.com/alice/items/abc.md') {
+        return new Response('---\ntitle: Article\nauthor: alice\n---\n# Article\n\nBody', { status: 200 });
+      }
       if (url.includes('/compat/chat/completions')) return jsonResponse({}, 503);
       if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
         savedMarkdown = base64ToUtf8(JSON.parse(String(init?.body)).content);

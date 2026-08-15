@@ -5,13 +5,34 @@ import { makeEnv } from './helpers';
 afterEach(() => vi.restoreAllMocks());
 
 describe('source fetchers', () => {
-  it('fetches Qiita from its Markdown endpoint', async () => {
+  it('takes the Qiita title from the front matter, not from the first body heading', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('# TypeScriptの話\n\n本文', { status: 200 }),
+      new Response(
+        [
+          '---',
+          'title: TypeScriptの話',
+          'tags: TypeScript',
+          'author: alice',
+          'slide: false',
+          '---',
+          '# 全体像',
+          '',
+          '本文',
+        ].join('\n'),
+        { status: 200 },
+      ),
     );
     const result = await fetchContent('https://qiita.com/alice/items/abc', makeEnv());
     expect(spy.mock.calls[0]?.[0].toString()).toBe('https://qiita.com/alice/items/abc.md');
     expect(result).toMatchObject({ source: 'qiita', title: 'TypeScriptの話', author: 'alice' });
+    // 保存時に自前のフロントマターを付けるため、Qiita側のフロントマターは残さない。
+    expect(result.markdown).toBe('# 全体像\n\n本文');
+  });
+
+  it('falls back to the Qiita item id when the front matter is missing', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('# 全体像\n\n本文', { status: 200 }));
+    const result = await fetchContent('https://qiita.com/alice/items/abc', makeEnv());
+    expect(result).toMatchObject({ source: 'qiita', title: 'abc', author: 'alice' });
   });
 
   it('converts the Zenn API body_html back into Markdown', async () => {

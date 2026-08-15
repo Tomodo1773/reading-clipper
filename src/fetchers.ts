@@ -26,18 +26,36 @@ function finalize(content: FetchedContent): FetchedContent {
   };
 }
 
+/**
+ * Qiitaの`.md`は本文の前にYAMLフロントマターを置く。記事タイトルはそこにしか無く、
+ * 本文は見出しから始まるため、本文の最初の見出しをタイトルとして扱ってはいけない。
+ */
+function splitQiitaFrontMatter(markdown: string): {
+  fields: Record<string, string>;
+  body: string;
+} {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match?.[1]) return { fields: {}, body: markdown };
+  const fields: Record<string, string> = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (field?.[1]) fields[field[1]] = (field[2] ?? '').trim();
+  }
+  return { fields, body: markdown.slice(match[0].length) };
+}
+
 async function fetchQiita(url: URL): Promise<FetchedContent> {
   const markdownUrl = new URL(url);
   if (!markdownUrl.pathname.endsWith('.md')) markdownUrl.pathname += '.md';
   const response = await fetchWithTimeout(markdownUrl, { headers: { accept: 'text/markdown' } }, 15_000, 'fetch');
   assertOk(response, 'fetch');
-  const markdown = await response.text();
+  const { fields, body } = splitQiitaFrontMatter(await response.text());
   return finalize({
     canonicalUrl: url.toString(),
     source: 'qiita',
-    title: firstHeading(markdown) ?? url.pathname.split('/').at(-1) ?? 'Qiita article',
-    author: url.pathname.split('/').filter(Boolean)[0],
-    markdown,
+    title: fields.title || (url.pathname.split('/').at(-1) ?? 'Qiita article'),
+    author: fields.author || url.pathname.split('/').filter(Boolean)[0],
+    markdown: body,
     complete: true,
   });
 }
