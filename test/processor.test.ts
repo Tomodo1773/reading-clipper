@@ -126,16 +126,16 @@ describe('clip processor', () => {
   });
 
   it('re-fetches, re-summarizes and overwrites when Slack redelivers the same event', async () => {
-    const existingMarkdown = renderClipMarkdown({
-      job,
-      content: {
+    const existingMarkdown = renderClipMarkdown(
+      {
         canonicalUrl: job.url,
         source: 'qiita',
         title: 'Worker設計',
         markdown: '# Worker設計\n\n古い本文。',
         complete: true,
       },
-    });
+      job.receivedAt,
+    );
     const requested: string[] = [];
     let putSha: string | undefined;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

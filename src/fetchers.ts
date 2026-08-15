@@ -1,4 +1,4 @@
-import { ClipError } from './errors';
+import { ClipError, isRetryableStatus } from './errors';
 import type { Env, FetchedContent } from './types';
 import { canonicalizeUrl, classifyUrl, extractXPostId, extractZennArticleSlug } from './url';
 import { asRecord, assertOk, fetchWithTimeout, stringField } from './utils';
@@ -127,7 +127,7 @@ function parseHtml(html: string): HtmlNode[] {
     if (!tag) continue;
     const element: HtmlElement = { tag, attrs: parseAttributes(match[3] ?? ''), children: [] };
     top().children.push(element);
-    if (!VOID_TAGS.has(tag) && match[4] !== '/') stack.push(element);
+    if (!VOID_TAGS.has(tag)) stack.push(element);
   }
   if (cursor < html.length) top().children.push(decodeEntities(html.slice(cursor)));
   return root.children;
@@ -486,21 +486,20 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
   const metadata = asRecord(data?.metadata);
   const markdown = stringField(data, 'markdown');
 
-  // Firecrawlが取得先の404やブロックをどう報告するかは公式に明記されていない。
-  // 成功・失敗のどちらの経路も本番のログから読めるようにしておく。
-  console.log(
-    JSON.stringify({
-      stage: 'fetch',
-      source: 'web',
-      url: url.toString(),
-      firecrawlSuccess: root?.success,
-      statusCode: metadata?.statusCode,
-      firecrawlError: metadata?.error,
-      markdownLength: markdown?.length ?? 0,
-    }),
-  );
-
-  if (root?.success !== true) throw new ClipError('Firecrawl reported failure', 'fetch', false);
+  // 失敗時は`data`ごと欠落するため、理由はトップレベルの`error`にしか入らない。
+  if (root?.success !== true) {
+    throw new ClipError(`Firecrawl reported failure: ${stringField(root, 'error') ?? 'no reason'}`, 'fetch', false);
+  }
+  // Firecrawlは取得先が404でも`success: true`で404ページのMarkdownを返す。
+  const targetStatus = metadata?.statusCode;
+  if (typeof targetStatus === 'number' && targetStatus >= 400) {
+    throw new ClipError(
+      `Firecrawl target returned ${targetStatus}`,
+      'fetch',
+      isRetryableStatus(targetStatus),
+      targetStatus,
+    );
+  }
   if (!markdown) throw new ClipError('Firecrawl returned no Markdown', 'fetch', false);
 
   return finalize({

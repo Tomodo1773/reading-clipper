@@ -128,4 +128,22 @@ describe('source fetchers', () => {
       onlyCleanContent: true,
     });
   });
+
+  it('fails the clip when Firecrawl scraped an error page', async () => {
+    // Firecrawlは取得先が404でも`success: true`で404ページのMarkdownを返す。
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { markdown: '# Not Found', metadata: { statusCode: 404, error: 'Not Found' } },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    await expect(fetchContent('https://example.com/missing', makeEnv())).rejects.toMatchObject({
+      stage: 'fetch',
+      retryable: false,
+      status: 404,
+    });
+  });
 });

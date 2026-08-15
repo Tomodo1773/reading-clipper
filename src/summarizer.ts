@@ -2,10 +2,6 @@ import { ClipError } from './errors';
 import type { Env, FetchedContent } from './types';
 import { asRecord, assertOk, fetchWithTimeout, stringField } from './utils';
 
-export interface SummaryResult {
-  text: string;
-}
-
 const SUMMARY_SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通して「要するに何なのか」を教えてくれる、面倒見のいい年上のお姉さんです。読み手はあなたの一言だけを見て、その記事を今読むかどうかを決めます。
 
 # 中身
@@ -39,7 +35,7 @@ function stripCodeFence(value: string): string {
   return value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
 }
 
-export function parseSummaryResponse(value: string): SummaryResult {
+export function parseSummaryResponse(value: string): string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripCodeFence(value));
@@ -53,13 +49,10 @@ export function parseSummaryResponse(value: string): SummaryResult {
     throw new ClipError('AI response did not contain a summary', 'summary', true);
   }
   // Slackのチャットに収まる自然な文章にするため、改行を含まない1行に正規化する。
-  return { text: summary.replace(/\s*\n+\s*/gu, ' ').trim() };
+  return summary.replace(/\s*\n+\s*/gu, ' ').trim();
 }
 
-export async function summarizeContent(
-  content: FetchedContent,
-  env: Env,
-): Promise<SummaryResult> {
+export async function summarizeContent(content: FetchedContent, env: Env): Promise<string> {
   const response = await fetchWithTimeout(
     `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID)}/${encodeURIComponent(env.AI_GATEWAY_ID)}/compat/chat/completions`,
     {
@@ -103,16 +96,14 @@ function withSentenceEnd(value: string): string {
 }
 
 export function formatSuccessReply(
-  summary: SummaryResult,
+  summary: string,
   complete: boolean,
   htmlUrl: string,
   ignoredUrlCount: number,
 ): string {
-  const sentences = [withSentenceEnd(summary.text)];
-  if (!complete) sentences.push('本文が長かったから、末尾は省いてあるわ。');
+  const truncated = complete ? '' : '本文が長かったから、末尾は省いてあるわ。';
   const ignored = ignoredUrlCount > 0 ? `（残り${ignoredUrlCount}件のURLは手つかずよ）` : '';
-  sentences.push(`GitHubには保存しておいたわよ${ignored}: ${htmlUrl}`);
-  return sentences.join('');
+  return `${withSentenceEnd(summary)}${truncated}GitHubには保存しておいたわよ${ignored}: ${htmlUrl}`;
 }
 
 export function formatPartialReply(htmlUrl: string, ignoredUrlCount: number): string {

@@ -4,7 +4,6 @@ import {
   asRecord,
   assertOk,
   base64ToBytes,
-  base64ToUtf8,
   bytesToBase64Url,
   fetchWithTimeout,
   stringField,
@@ -26,7 +25,6 @@ let tokenPromise: Promise<CachedToken> | undefined;
 export interface GitHubFile {
   path: string;
   sha: string;
-  content: string;
   htmlUrl: string;
 }
 
@@ -155,12 +153,11 @@ export async function getGitHubFile(env: Env, path: string): Promise<GitHubFile 
   assertOk(response, 'github');
   const payload = asRecord(await response.json());
   const sha = stringField(payload, 'sha');
-  const content = stringField(payload, 'content');
   const htmlUrl = stringField(payload, 'html_url');
-  if (!sha || !content || !htmlUrl) {
+  if (!sha || !htmlUrl) {
     throw new ClipError('GitHub content response was invalid', 'github', true);
   }
-  return { path, sha, content: base64ToUtf8(content), htmlUrl };
+  return { path, sha, htmlUrl };
 }
 
 export async function putGitHubFile(
@@ -197,7 +194,7 @@ export async function putGitHubFile(
   const savedSha = stringField(saved, 'sha');
   const htmlUrl = stringField(saved, 'html_url');
   if (!savedSha || !htmlUrl) throw new ClipError('GitHub save response was invalid', 'github', true);
-  return { path, sha: savedSha, content, htmlUrl };
+  return { path, sha: savedSha, htmlUrl };
 }
 
 /** Testsでmodule-scope token cacheを分離するためのhook。 */

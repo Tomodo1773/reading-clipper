@@ -1,14 +1,9 @@
 import { asClipError, ClipError } from './errors';
 import { fetchContent } from './fetchers';
-import { getGitHubFile, putGitHubFile, type GitHubFile } from './github';
+import { getGitHubFile, putGitHubFile } from './github';
 import { renderClipMarkdown } from './markdown';
 import { postSlackMessage } from './slack';
-import {
-  formatPartialReply,
-  formatSuccessReply,
-  summarizeContent,
-  type SummaryResult,
-} from './summarizer';
+import { formatPartialReply, formatSuccessReply, summarizeContent } from './summarizer';
 import type { ClipJob, Env } from './types';
 import { buildClipPath, canonicalizeUrl } from './url';
 
@@ -53,7 +48,7 @@ export async function processClipJob(job: ClipJob, env: Env, attempts: number): 
   // 既存ファイルの更新にはshaが要る。同じタイトルの記事は上書きする。
   const existing = await getGitHubFile(env, path);
 
-  let summary: SummaryResult | undefined;
+  let summary: string | undefined;
   try {
     summary = await summarizeContent(content, env);
   } catch (error) {
@@ -64,18 +59,8 @@ export async function processClipJob(job: ClipJob, env: Env, attempts: number): 
     );
   }
 
-  const markdown = renderClipMarkdown({ job, content });
-  let saved: GitHubFile;
-  try {
-    saved = await putGitHubFile(env, path, markdown, existing?.sha);
-  } catch (error) {
-    const saveError = asClipError(error, 'github');
-    if (saveError.status !== 409) throw saveError;
-    // 同じパスを別の処理が先に更新した。内容はそちらのものになるが、返信はできる。
-    const concurrent = await getGitHubFile(env, path);
-    if (!concurrent) throw saveError;
-    saved = concurrent;
-  }
+  const markdown = renderClipMarkdown(content, job.receivedAt);
+  const saved = await putGitHubFile(env, path, markdown, existing?.sha);
 
   await replyToJob(
     job,

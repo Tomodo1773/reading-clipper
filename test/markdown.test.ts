@@ -1,21 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { renderClipMarkdown } from '../src/markdown';
 
-const job = {
-  version: 1,
-  jobId: 'Ev123',
-  url: 'https://example.com/a',
-  slackChannel: 'D1',
-  slackThreadTs: '1.1',
-  receivedAt: '2026-08-15T00:00:00.000Z',
-  ignoredUrlCount: 0,
-} as const;
+const clippedAt = '2026-08-15T00:00:00.000Z';
 
 describe('stored Markdown', () => {
   it('puts the fetched body directly under the front matter', () => {
-    const markdown = renderClipMarkdown({
-      job,
-      content: {
+    const markdown = renderClipMarkdown(
+      {
         canonicalUrl: 'https://example.com/a',
         source: 'web',
         title: 'Example',
@@ -24,7 +15,8 @@ describe('stored Markdown', () => {
         markdown: '\n# Example\n\n本文。\n',
         complete: false,
       },
-    });
+      clippedAt,
+    );
 
     expect(markdown).toBe(
       [
@@ -47,16 +39,16 @@ describe('stored Markdown', () => {
   });
 
   it('keeps the summary out of the saved file', () => {
-    const markdown = renderClipMarkdown({
-      job,
-      content: {
+    const markdown = renderClipMarkdown(
+      {
         canonicalUrl: 'https://example.com/a',
         source: 'qiita',
         title: 'Example',
         markdown: '# Body',
         complete: true,
       },
-    });
+      clippedAt,
+    );
 
     expect(markdown).not.toContain('summary');
     expect(markdown).not.toContain('## 取得内容');
