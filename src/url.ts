@@ -1,6 +1,5 @@
 import { ClipError } from './errors';
 import type { ClipSource } from './types';
-import { sha256Hex } from './utils';
 
 const TRAILING_PUNCTUATION = /[.,!?。、，．！？]+$/u;
 
@@ -70,23 +69,54 @@ export function extractXPostId(url: URL): string | undefined {
   return match?.[1];
 }
 
-function makeSlug(url: URL): string {
-  let pathname = url.pathname;
-  try {
-    pathname = decodeURIComponent(pathname);
-  } catch {
-    // 不正なpercent encodingも、URLとしては保存先を決められるようにする。
+/** Windowsが禁じる文字と制御文字。日本語や記号はここに含まれないため残す。 */
+const FORBIDDEN_CHARACTERS = /[<>:"/\\|?*\u0000-\u001f\u007f]/gu;
+/** Windowsの予約デバイス名。拡張子が付いていても予約されたままになる。 */
+const RESERVED_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu;
+/** 多くのファイルシステムとGitで、パス構成要素1つの上限は255バイト。 */
+const MAX_FILE_NAME_BYTES = 255;
+const CLIP_EXTENSION = '.md';
+const FALLBACK_FILE_NAME = 'untitled';
+
+const utf8 = new TextEncoder();
+
+/** マルチバイト文字やサロゲートペアの途中で切らずに、UTF-8バイト長で切り詰める。 */
+function truncateToBytes(value: string, maxBytes: number): string {
+  let total = 0;
+  let result = '';
+  for (const character of value) {
+    const size = utf8.encode(character).length;
+    if (total + size > maxBytes) break;
+    total += size;
+    result += character;
   }
-  const decoded = pathname
-    .replace(/\.md$/i, '')
-    .replace(/[^\p{Letter}\p{Number}]+/gu, '-')
-    .replace(/^-|-$/g, '')
-    .toLowerCase();
-  return (decoded || 'index').slice(0, 80).replace(/-$/g, '') || 'index';
+  return result;
 }
 
-export async function buildClipPath(canonicalUrl: string): Promise<string> {
-  const url = new URL(canonicalUrl);
-  const hash = (await sha256Hex(canonicalUrl)).slice(0, 16);
-  return `clips/${url.hostname}/${makeSlug(url)}-${hash}.md`;
+/**
+ * 記事タイトルを、そのまま読めるファイル名へ整える。
+ * ローマ字化や小文字化はせず、システム上壊れる要素だけを取り除く。
+ */
+function makeClipFileName(title: string): string {
+  let name = title
+    .replace(FORBIDDEN_CHARACTERS, ' ')
+    // 連続する空白は`-`1つにまとめ、CLIやgitで扱いやすくする。`\s`は全角空白も含む。
+    .replace(/\s+/gu, '-')
+    .replace(/-{2,}/gu, '-')
+    // 先頭のドットは隠しファイル化し、末尾のドットと空白はWindowsで壊れる。
+    .replace(/^[-.\s]+|[-.\s]+$/gu, '');
+
+  const [head = '', ...rest] = name.split('.');
+  if (RESERVED_DEVICE_NAME.test(head)) name = [`${head}_`, ...rest].join('.');
+
+  name = truncateToBytes(name, MAX_FILE_NAME_BYTES - CLIP_EXTENSION.length).replace(
+    /[-.\s]+$/gu,
+    '',
+  );
+  return `${name || FALLBACK_FILE_NAME}${CLIP_EXTENSION}`;
+}
+
+/** タイトルは取得後にしか分からないため、fetchの結果を受け取って保存先を決める。 */
+export function buildClipPath(canonicalUrl: string, title: string): string {
+  return `clips/${new URL(canonicalUrl).hostname}/${makeClipFileName(title)}`;
 }

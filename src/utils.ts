@@ -30,12 +30,6 @@ export async function sha256Bytes(value: string): Promise<Uint8Array> {
   return new Uint8Array(digest);
 }
 
-export async function sha256Hex(value: string): Promise<string> {
-  return [...(await sha256Bytes(value))]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
-
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   const chunkSize = 0x8000;

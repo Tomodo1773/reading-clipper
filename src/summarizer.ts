@@ -52,7 +52,7 @@ export function parseSummaryResponse(value: string): SummaryResult {
   if (typeof summary !== 'string' || !summary.trim()) {
     throw new ClipError('AI response did not contain a summary', 'summary', true);
   }
-  // 保存したMarkdownから読み戻せるよう、要約は改行を含まない1行に正規化する。
+  // Slackのチャットに収まる自然な文章にするため、改行を含まない1行に正規化する。
   return { text: summary.replace(/\s*\n+\s*/gu, ' ').trim() };
 }
 

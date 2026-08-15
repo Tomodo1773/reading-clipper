@@ -35,6 +35,7 @@ function jsonResponse(value: unknown, status = 200): Response {
 describe('clip processor', () => {
   it('fetches, summarizes, saves and replies in one successful flow', async () => {
     let savedMarkdown = '';
+    let savedPath = '';
     let slackBody: Record<string, unknown> | undefined;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -63,6 +64,7 @@ describe('clip processor', () => {
       }
       if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
         const body = JSON.parse(String(init?.body));
+        savedPath = decodeURIComponent(url.split('/contents/')[1] ?? '');
         savedMarkdown = base64ToUtf8(body.content);
         return jsonResponse({
           content: { sha: 'new-sha', html_url: 'https://github.com/example/clips/blob/main/clip.md' },
@@ -78,9 +80,15 @@ describe('clip processor', () => {
     await processClipJob(job, makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), 1);
 
     expect(savedMarkdown).toContain('slack_event_id: "EvProcess"');
-    expect(savedMarkdown).toContain('summary_status: "succeeded"');
-    expect(savedMarkdown).toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
+    // 保存先は記事タイトル起点で、URLハッシュは付けない。
+    expect(savedPath).toBe('clips/qiita.com/Worker設計.md');
+    // フロントマターの直後から本文で、要約や見出しの追加はしない。
+    expect(savedMarkdown).toBe(
+      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Worker設計"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nslack_event_id: "EvProcess"\nfetch_complete: true\n---\n\n# Worker設計\n\nQueueで重い処理を分離する。\n`,
+    );
+    expect(savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
     expect(slackBody?.thread_ts).toBe(job.slackThreadTs);
+    expect(slackBody?.text).toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
     expect(slackBody?.text).toContain('GitHubには保存しておいたわよ');
   });
 
@@ -112,28 +120,45 @@ describe('clip processor', () => {
     });
 
     await processClipJob(job, makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), 4);
-    expect(savedMarkdown).toContain('summary_status: "failed"');
+    expect(savedMarkdown).toBe(
+      `---\nsource_url: "https://qiita.com/alice/items/abc"\nsource_type: "qiita"\ntitle: "Article"\nauthor: "alice"\nclipped_at: "2026-08-15T00:00:00.000Z"\nslack_event_id: "EvProcess"\nfetch_complete: true\n---\n\n# Article\n\nBody\n`,
+    );
     expect(slackText).toContain('要約の方は失敗したけれど');
   });
 
-  it('reuses a stored result for the same Slack event', async () => {
+  it('re-fetches, re-summarizes and overwrites when Slack redelivers the same event', async () => {
     const existingMarkdown = renderClipMarkdown({
       job,
       content: {
         canonicalUrl: job.url,
         source: 'qiita',
-        title: 'Stored',
-        markdown: '# Stored',
+        title: 'Worker設計',
+        markdown: '# Worker設計\n\n古い本文。',
         complete: true,
       },
-      summary: { text: '保存済みの記事ね。要するにもう一度取りに行く必要はないってことよ。' },
     });
     const requested: string[] = [];
+    let putSha: string | undefined;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
+      const method = init?.method ?? 'GET';
       requested.push(url);
       if (url.includes('/app/installations/')) {
         return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      if (url === 'https://qiita.com/alice/items/abc.md') {
+        return new Response('# Worker設計\n\n新しい本文。', { status: 200 });
+      }
+      if (url.includes('/compat/chat/completions')) {
+        return jsonResponse({
+          choices: [{ message: { content: JSON.stringify({ summary: '取り直した要約よ。' }) } }],
+        });
+      }
+      if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
+        putSha = JSON.parse(String(init?.body)).sha;
+        return jsonResponse({
+          content: { sha: 'new-sha', html_url: 'https://github.com/example/clips/blob/main/stored.md' },
+        });
       }
       if (url.includes('/repos/example/clips/contents/')) {
         return jsonResponse({
@@ -147,8 +172,10 @@ describe('clip processor', () => {
     });
 
     await processClipJob(job, makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), 2);
-    expect(requested.some((url) => url.endsWith('/abc.md'))).toBe(false);
-    expect(requested.some((url) => url.includes('/compat/chat/completions'))).toBe(false);
+    expect(requested.some((url) => url.endsWith('/abc.md'))).toBe(true);
+    expect(requested.some((url) => url.includes('/compat/chat/completions'))).toBe(true);
+    // 保存済みファイルは、取得したshaでそのまま上書きする。
+    expect(putSha).toBe('stored-sha');
   });
 
   it('acks permanent validation failures after notifying Slack', async () => {

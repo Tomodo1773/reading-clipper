@@ -1,33 +1,80 @@
 import { describe, expect, it } from 'vitest';
-import { parseStoredClip, renderClipMarkdown } from '../src/markdown';
+import { renderClipMarkdown } from '../src/markdown';
+
+const job = {
+  version: 1,
+  jobId: 'Ev123',
+  url: 'https://example.com/a',
+  slackChannel: 'D1',
+  slackThreadTs: '1.1',
+  receivedAt: '2026-08-15T00:00:00.000Z',
+  ignoredUrlCount: 0,
+} as const;
 
 describe('stored Markdown', () => {
-  it('round-trips idempotency and summary metadata', () => {
+  it('puts the fetched body directly under the front matter', () => {
     const markdown = renderClipMarkdown({
-      job: {
-        version: 1,
-        jobId: 'Ev123',
-        url: 'https://example.com/a',
-        slackChannel: 'D1',
-        slackThreadTs: '1.1',
-        receivedAt: '2026-08-15T00:00:00.000Z',
-        ignoredUrlCount: 0,
-      },
+      job,
       content: {
         canonicalUrl: 'https://example.com/a',
         source: 'web',
         title: 'Example',
-        markdown: '# Body',
+        author: 'Alice',
+        publishedAt: '2026-08-01T00:00:00.000Z',
+        markdown: '\n# Example\n\n本文。\n',
         complete: false,
       },
-      summary: { text: 'ああ、Workerの記事ね。要するに重い処理はQueueへ逃がせってことよ。' },
     });
-    expect(markdown).toContain('summary_status: "succeeded"');
-    expect(parseStoredClip(markdown)).toEqual({
-      slackEventId: 'Ev123',
-      summaryStatus: 'succeeded',
-      summary: { text: 'ああ、Workerの記事ね。要するに重い処理はQueueへ逃がせってことよ。' },
-      fetchComplete: false,
+
+    expect(markdown).toBe(
+      [
+        '---',
+        'source_url: "https://example.com/a"',
+        'source_type: "web"',
+        'title: "Example"',
+        'author: "Alice"',
+        'published_at: "2026-08-01T00:00:00.000Z"',
+        'clipped_at: "2026-08-15T00:00:00.000Z"',
+        'slack_event_id: "Ev123"',
+        'fetch_complete: false',
+        '---',
+        '',
+        '# Example',
+        '',
+        '本文。',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('keeps the summary out of the saved file', () => {
+    const markdown = renderClipMarkdown({
+      job,
+      content: {
+        canonicalUrl: 'https://example.com/a',
+        source: 'qiita',
+        title: 'Example',
+        markdown: '# Body',
+        complete: true,
+      },
     });
+
+    expect(markdown).not.toContain('summary');
+    expect(markdown).not.toContain('## 取得内容');
+    expect(markdown).toBe(
+      [
+        '---',
+        'source_url: "https://example.com/a"',
+        'source_type: "qiita"',
+        'title: "Example"',
+        'clipped_at: "2026-08-15T00:00:00.000Z"',
+        'slack_event_id: "Ev123"',
+        'fetch_complete: true',
+        '---',
+        '',
+        '# Body',
+        '',
+      ].join('\n'),
+    );
   });
 });
