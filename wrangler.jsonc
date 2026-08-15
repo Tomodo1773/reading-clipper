@@ -36,6 +36,8 @@
   // 環境固有値（account ID、gateway URL、各種トークン）はここに書かない。
   // account IDは CLOUDFLARE_ACCOUNT_ID、他は `wrangler secret put` で渡す。
   "vars": {
-    "AI_GATEWAY_ID": "reading-clipper-summarizer"
+    "AI_GATEWAY_ID": "reading-clipper-summarizer",
+    // モデルはsecretではない。AI Gateway未対応時もコード変更なしで差し替えられるようbindingにする。
+    "AI_MODEL": "gemini-3.7-flash"
   }
 }

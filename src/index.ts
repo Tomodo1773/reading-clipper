@@ -1,34 +1,101 @@
 import { Hono } from 'hono';
+import { handleQueueMessage } from './processor';
+import { postSlackMessage, verifySlackSignature } from './slack';
 import type { ClipJob, Env } from './types';
+import { extractUrls } from './url';
 
-/**
- * 受付側。SlackのEvents APIは3秒以内の応答を要求するため、
- * ここでは署名検証とQueueへの登録までを行い、本文取得・要約・保存はqueueハンドラーに渡す。
- *
- * 骨組みのみ。ハンドラーの中身は未実装で、意図的に失敗を返す。
- */
+interface SlackEventEnvelope {
+  type?: string;
+  challenge?: string;
+  event_id?: string;
+  event_time?: number;
+  event?: {
+    type?: string;
+    subtype?: string;
+    bot_id?: string;
+    channel?: string;
+    channel_type?: string;
+    text?: string;
+    ts?: string;
+    thread_ts?: string;
+  };
+}
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.get('/health', (c) => c.text('ok'));
 
-app.post('/slack/events', (c) =>
-  // 署名検証を伴わない200応答はSlackに受理として扱われ、
-  // 未処理のURLを取りこぼす。実装するまでは明示的に失敗させる。
-  c.json({ error: 'not_implemented' }, 501),
-);
+app.post('/slack/events', async (c) => {
+  const body = await c.req.text();
+  const valid = await verifySlackSignature(
+    body,
+    c.req.header('x-slack-request-timestamp') ?? null,
+    c.req.header('x-slack-signature') ?? null,
+    c.env.SLACK_SIGNING_SECRET,
+  );
+  if (!valid) return c.json({ error: 'invalid_signature' }, 401);
+
+  let payload: SlackEventEnvelope;
+  try {
+    payload = JSON.parse(body) as SlackEventEnvelope;
+  } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+  if (payload.type === 'url_verification' && payload.challenge) {
+    return c.json({ challenge: payload.challenge });
+  }
+
+  const event = payload.event;
+  const isDirectUserMessage =
+    payload.type === 'event_callback' &&
+    payload.event_id &&
+    event?.type === 'message' &&
+    event.channel_type === 'im' &&
+    !event.subtype &&
+    !event.bot_id &&
+    event.channel &&
+    event.ts &&
+    typeof event.text === 'string';
+  if (!isDirectUserMessage) return c.json({ ok: true });
+
+  const urls = extractUrls(event.text!);
+  if (urls.length === 0) {
+    c.executionCtx.waitUntil(
+      postSlackMessage({
+        token: c.env.SLACK_BOT_TOKEN,
+        channel: event.channel!,
+        threadTs: event.ts!,
+        text: 'URLが見つからなかったよ。HTTP(S)のURLを1件送ってね。',
+        idempotencyKey: `${payload.event_id}:no-url`,
+      }).catch((error: unknown) => {
+        console.error(
+          JSON.stringify({ jobId: payload.event_id, stage: 'slack', noUrlReplyFailed: true }),
+        );
+      }),
+    );
+    return c.json({ ok: true });
+  }
+
+  const job: ClipJob = {
+    version: 1,
+    jobId: payload.event_id!,
+    url: urls[0]!,
+    slackChannel: event.channel!,
+    slackThreadTs: event.ts!,
+    receivedAt: new Date((payload.event_time ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+    ignoredUrlCount: Math.max(0, urls.length - 1),
+  };
+  try {
+    await c.env.CLIP_QUEUE.send(job);
+  } catch {
+    return c.json({ error: 'queue_unavailable' }, 503);
+  }
+  return c.json({ ok: true });
+});
 
 export default {
   fetch: app.fetch,
-
-  /**
-   * 処理側。URL別の取得、Markdown化、GitHub保存、AI要約、Slack返信を行う。
-   *
-   * 骨組みのみ。ackすると取り込めなかったURLが黙って消えるため、
-   * 実装するまでは例外を投げてretryさせ、最終的にDLQへ送る。
-   */
-  async queue(batch: MessageBatch<ClipJob>, _env: Env): Promise<void> {
-    throw new Error(
-      `clip processing is not implemented yet (${batch.messages.length} message(s) left unacked)`,
-    );
+  async queue(batch: MessageBatch<ClipJob>, env: Env): Promise<void> {
+    await Promise.all(batch.messages.map((message) => handleQueueMessage(message, env)));
   },
 } satisfies ExportedHandler<Env, ClipJob>;

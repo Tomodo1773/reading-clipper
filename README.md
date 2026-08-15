@@ -43,7 +43,7 @@ Slack
 - Repository permissionは `Contents: Read and write` のみにする。
 - 処理WorkerはGitHub AppとしてJWTを生成し、installation access tokenを取得してGitHub Contents APIを呼ぶ。
 - installation access tokenは発行から1時間で失効する。
-- GitHub Appのprivate keyはCloudflare Workers Secretsへ保存する。
+- GitHub Appのprivate keyはPKCS#8 PEM（`BEGIN PRIVATE KEY`）形式にしてCloudflare Workers Secretsへ保存する。
 
 GitHubは、長期稼働する外部連携にはGitHub Appを推奨し、PATはAPIテストや短期間のスクリプトに適するとしている。そのためfine-grained PATは初期実装を簡単にするための代替候補にはなるが、本サービスの採用方式にはしない。
 
@@ -110,11 +110,11 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 完了した項目には末尾に **完了** と記録する。
 
 1. プロジェクトの足場、`wrangler.jsonc`、AI Gatewayセットアップスクリプトを書く。**完了**（[ADR 0001](docs/adr/0001-wrangler-over-opentofu.md)）
-2. TypeScript、Hono、Queue consumerのアプリコードを書く。
-3. 保存先private repository用のGitHub Appを作成してインストールする。
-4. X APIキーを用意する。
-5. Firecrawl APIキーを取得する。
-6. Gemini APIキーを用意する。
+2. TypeScript、Hono、Queue consumerのアプリコードを書く。**完了**
+3. 保存先private repository用のGitHub Appを作成してインストールする。**完了**
+4. X APIキーを用意する。**完了**
+5. Firecrawl APIキーを取得する。**完了**
+6. Gemini APIキーを用意する。**完了**
 7. Slack App/Botを作成し、URLを受け付ける設定を用意する。
 8. Cloudflareのリソースを用意する。
    1. `pnpm wrangler queues create reading-clipper-clips` と `pnpm wrangler queues create reading-clipper-clips-dlq`
@@ -131,14 +131,22 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 | 対象 | 初期方針 | 現時点の扱い |
 |---|---|---|
 | Qiitaの記事 | 記事URL末尾に `.md` を付けて取得 | Qiita公式ブログで提供方法を確認済み |
-| Xの投稿・記事 | X APIを利用 | 通常の投稿は取得対象とし、X Articles本文の取得可否だけ実装前に確認する |
+| Xの投稿・記事 | X APIを利用 | `article`、`note_tweet`、通常本文の順で取得する |
 | その他のWebページ | Firecrawlを利用 | Scrape APIがMarkdownを返せることを確認済み |
+
+## アプリの動作
+
+- Slack AppとのDM（メッセージタブ）へURLを送る。結果は元メッセージのスレッドへ返す。
+- 1通に複数URLがある場合は先頭だけを処理し、残りの件数を結果に表示する。
+- 保存先は `clips/{host}/{pathSlug}-{URL hash}.md` とする。同じURLを新しく送ると再取得して同じファイルを更新し、Slack自身による同一イベントの再送は保存済み結果を再利用する。
+- 本文取得に失敗した場合は保存も要約もしない。要約だけが失敗した場合は、その事実を記録して本文だけ保存する。
+- 一時的な失敗は指数バックオフ付きで3回再試行する。最終失敗をSlackへ通知した後、メッセージをdead letter queueへ送り、4日以内に原因を直してURLを再送する。
 
 ## Slackへ返す要約
 
 要約は2〜4文とし、見出しやセクション分けをせず、Slackのチャットに収まる自然な文章にする。
 
-初期版ではGeminiを使う。Cloudflare AI GatewayのOpenAI互換エンドポイントを使い、将来OpenAIへ移行できるようプロバイダ固有SDKに依存しない。
+初期版ではGemini 3.7 Flashを使う。モデル名は `AI_MODEL` bindingで差し替え可能にする。Cloudflare AI GatewayのOpenAI互換エンドポイントを使い、将来OpenAIへ移行できるようプロバイダ固有SDKに依存しない。
 
 GeminiはCloudflare AI Gateway経由で呼び出し、AI Gatewayでプロンプトと応答本文を含むログを保存して、要約の入力と出力を追跡できるようにする。OpenTelemetryの送信先は将来必要になった時点で決める。
 
@@ -150,7 +158,7 @@ GeminiはCloudflare AI Gateway経由で呼び出し、AI Gatewayでプロンプ�
 - 取得が不完全な場合は、その事実
 - GitHubへの保存成否
 
-Geminiのモデルとプロンプトは、実際の記事を使った出力比較を行ってから決める。
+Geminiには、テーマと結論を1文、主要な内容を1文で返させる。取得の不完全性とGitHub保存結果はアプリ側で追加し、Slackへの返信全体を2〜4文に保つ。実際の記事を使った確認はAPIキーを用意した後に行い、必要なら `AI_MODEL` またはプロンプトを調整する。
 
 ## 初期バージョンに含めないもの
 
@@ -167,17 +175,9 @@ Geminiのモデルとプロンプトは、実際の記事を使った出力比�
 
 状態の種類、状態の正本、記事の探し方、変更・取り消し・一括操作、Slack以外の操作面の要否を含め、利用場面から別途設計する。それまでは読書状態のデータ設計を行わない。
 
-## 実装前に決めること
+## 取得内容の扱い
 
-- SlackでURLを送る具体的な方法と送信先
-- X Articles本文を公式APIで取得できるか
-- 各取得元の利用条件上、どこまで本文を保存できるか
-- 同じURLが再度送られた場合の扱い
-- 取得、要約、GitHub保存のどこかが失敗した場合の扱い
-- 2〜4文要約の品質基準と評価方法
-- Queue処理が失敗した場合の再試行と通知、およびdead letter queueに溜まったメッセージの扱い
-
-これらは実装時に都合のよい方式を先に置かず、利用例、制約、費用を確認してから決める。
+XはAPIから取得できる公開Postだけを対象とし、protected contentや位置情報は保存しない。著者と元URLをMarkdownに残し、保存先private repositoryの外へ再配布しない。Qiitaと一般Webも、利用者が指定したURLを個人利用のprivate repositoryへ保存する範囲に限定する。
 
 ## 初期バージョンの完了条件
 
