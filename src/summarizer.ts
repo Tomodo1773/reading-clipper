@@ -103,10 +103,11 @@ export function formatSuccessReply(
 ): string {
   const truncated = complete ? '' : '本文が長かったから、末尾は省いてあるわ。';
   const ignored = ignoredUrlCount > 0 ? `（残り${ignoredUrlCount}件のURLは手つかずよ）` : '';
-  return `${withSentenceEnd(summary)}${truncated}GitHubには保存しておいたわよ${ignored}: ${htmlUrl}`;
+  // <URL|ラベル>はSlackのmrkdwnリンク。長いURLをそのまま見せない。
+  return `${withSentenceEnd(summary)}${truncated}<${htmlUrl}|GitHubには保存>しておいたわよ${ignored}。`;
 }
 
 export function formatPartialReply(htmlUrl: string, ignoredUrlCount: number): string {
   const ignored = ignoredUrlCount > 0 ? ` 残り${ignoredUrlCount}件のURLは手つかずよ。` : '';
-  return `本文は取れたわ。要約の方は失敗したけれど、中身はGitHubへ保存しておいたわよ: ${htmlUrl}${ignored}`;
+  return `本文は取れたわ。要約の方は失敗したけれど、中身は<${htmlUrl}|GitHubへ保存>しておいたわよ。${ignored}`;
 }

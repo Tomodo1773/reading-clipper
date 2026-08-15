@@ -91,7 +91,9 @@ describe('clip processor', () => {
     expect(savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
     expect(slackBody?.thread_ts).toBe(job.slackThreadTs);
     expect(slackBody?.text).toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
-    expect(slackBody?.text).toContain('GitHubには保存しておいたわよ');
+    expect(slackBody?.text).toContain(
+      '<https://github.com/example/clips/blob/main/clip.md|GitHubには保存>しておいたわよ',
+    );
   });
 
   it('saves the body without a summary on the final attempt', async () => {
