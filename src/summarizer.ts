@@ -45,7 +45,6 @@ export async function summarizeContent(
       body: JSON.stringify({
         model: `google-ai-studio/${env.AI_MODEL}`,
         temperature: 0.2,
-        max_tokens: 300,
         response_format: { type: 'json_object' },
         messages: [
           {
