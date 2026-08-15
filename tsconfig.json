@@ -12,8 +12,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "noUncheckedIndexedAccess": true,
-    "allowImportingTsExtensions": true
+    "noUncheckedIndexedAccess": true
   },
   "include": ["scripts/**/*.ts"]
 }

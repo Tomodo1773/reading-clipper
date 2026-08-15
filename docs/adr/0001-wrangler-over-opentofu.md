@@ -102,5 +102,5 @@ Workerの存在と `observability` / `subdomain` / `tags` をOpenTofu正本に�
 - **Queueは先に作る必要がある。** `wrangler.jsonc` に `dead_letter_queue` を書いてもwranglerが自動作成するとは文書化されていない。自動プロビジョニングはbeta（wrangler 4.45.0以降）なので、`wrangler queues create` で明示的に作る
 - **`compatibility_date` は同梱workerdの対応日以下にする。** 超えると `wrangler dev` が `Compatibility date "..." is in the future and unsupported` で起動しない。`deploy --dry-run` は通ってしまうため、CIでは検出できない。共通ポリシーの `minimumReleaseAge: 10080` によりwranglerは7日以上前のものが入るので、上限は常に「今日」より前になる。実際に初回コミットで踏んだ（wrangler 4.120.0 の workerd は 1.20260801.1 で、`2026-08-15` を指定していた）
 - **依存の最新版は入らない。** `minimumReleaseAge: 10080` により公開7日未満は除外される。`ERR_PNPM_NO_MATURE_MATCHING_VERSION` はこの設定が働いた結果なので、緩めて回避せず7日以上前のバージョンを指定する
-- **AI Gatewayの `log_management`（ログ保存上限）は指定していない。** プランごとに既定値が異なり、上限を超える値を指定すると拒否される可能性があるため、Cloudflare側の既定に任せた。`log_management_strategy: "DELETE_OLDEST"` だけを設定し、上限到達時に古いログを消す
+- **AI Gatewayの「無効」は `0` ではなく `null` で表す。** `cache_ttl` / `rate_limiting_interval` / `rate_limiting_limit` はOpenAPIスキーマ上 `required` かつ `nullable: true` で、キーは必須だが未設定を表すのは `null`。`0` は「0秒」「0リクエスト」という具体的な値なので、レート制限に `0` を送ると全リクエストが429になりうる。Terraform Providerのドキュメント例は `0` を使っているが、あれはスキーマから生成されたプレースホルダで無効化の意味ではない。`log_management` は `minimum: 10000` かつ nullable なので指定せず、Cloudflare側の既定に任せている
 - Workerのobservability設定は `wrangler.jsonc` が正本になった。ダッシュボードで変えてもdeployで戻る
