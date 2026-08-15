@@ -112,17 +112,19 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 1. プロジェクトの足場、`wrangler.jsonc`、AI Gatewayセットアップスクリプトを書く。**完了**（[ADR 0001](docs/adr/0001-wrangler-over-opentofu.md)）
 2. TypeScript、Hono、Queue consumerのアプリコードを書く。**完了**
 3. 保存先private repository用のGitHub Appを作成してインストールする。**完了**
-4. X APIキーを用意する。**完了**
+4. X APIキーを用意する。**完了**（Bearer Token取得済み。X APIクレジット購入と支出上限設定は未完了）
 5. Firecrawl APIキーを取得する。**完了**
 6. Gemini APIキーを用意する。**完了**
 7. Slack App/Botを作成し、URLを受け付ける設定を用意する。
-8. Cloudflareのリソースを用意する。
-   1. `pnpm wrangler queues create reading-clipper-clips` と `pnpm wrangler queues create reading-clipper-clips-dlq`
-   2. `CLOUDFLARE_ACCOUNT_ID` と `CLOUDFLARE_API_TOKEN` を設定して `pnpm setup:aigw` を実行し、AI Gatewayを作成する。
-   3. AI Gatewayの認証トークンをダッシュボードで発行する。表示は一度きり。
-   4. Gemini APIキーをSecrets Storeへ登録する（BYOK）。
-   5. runtime secretsを `pnpm wrangler secret put <NAME>` で登録する。対象は `src/types.ts` の `Env` を参照する。
-9. ソースコードをpublic GitHub repositoryへpushする。
+8. Cloudflareのリソースを用意する。**完了**
+   1. `pnpm wrangler queues create reading-clipper-clips` と `pnpm wrangler queues create reading-clipper-clips-dlq`。**完了**
+   2. `CLOUDFLARE_ACCOUNT_ID` と `CLOUDFLARE_API_TOKEN` を設定して `pnpm setup:aigw` を実行し、AI Gatewayを作成する。**完了**
+   3. AI Gatewayの認証トークンをダッシュボードで発行する。表示は一度きり。**完了**
+   4. Gemini APIキーをSecrets Storeへ登録する（BYOK）。**完了**
+   5. runtime secretsを `pnpm wrangler secret put <NAME>` で登録する。対象は `src/types.ts` の `Env` を参照する。**完了**
+
+X APIは認証情報を取得しただけでは実際のAPI呼び出しまで完了しない。初回のX取得テスト前に、Developer Consoleでクレジットを購入し、支出上限を設定する。[X API pricing](https://docs.x.com/x-api/getting-started/pricing)
+9. ソースコードをpublic GitHub repositoryへpushする。**完了**
 10. CloudflareダッシュボードでWorkers BuildsのGit連携を手動で接続する。
 11. CI通過後、production branchへのmergeでWorkers Buildsがデプロイする。
 
