@@ -482,10 +482,25 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
   );
   assertOk(response, 'fetch');
   const root = asRecord(await response.json());
-  if (root?.success !== true) throw new ClipError('Firecrawl reported failure', 'fetch', false);
-  const data = asRecord(root.data);
+  const data = asRecord(root?.data);
   const metadata = asRecord(data?.metadata);
   const markdown = stringField(data, 'markdown');
+
+  // Firecrawlが取得先の404やブロックをどう報告するかは公式に明記されていない。
+  // 成功・失敗のどちらの経路も本番のログから読めるようにしておく。
+  console.log(
+    JSON.stringify({
+      stage: 'fetch',
+      source: 'web',
+      url: url.toString(),
+      firecrawlSuccess: root?.success,
+      statusCode: metadata?.statusCode,
+      firecrawlError: metadata?.error,
+      markdownLength: markdown?.length ?? 0,
+    }),
+  );
+
+  if (root?.success !== true) throw new ClipError('Firecrawl reported failure', 'fetch', false);
   if (!markdown) throw new ClipError('Firecrawl returned no Markdown', 'fetch', false);
 
   return finalize({

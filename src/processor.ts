@@ -116,6 +116,8 @@ export async function handleQueueMessage(
         jobId: message.body?.jobId,
         stage: clipError.stage,
         status: clipError.status,
+        // 同じstageでも原因が複数あるため、どれで落ちたかをログから判別できるようにする。
+        message: clipError.message,
         retryable: clipError.retryable,
         attempts: message.attempts,
       }),
