@@ -9,10 +9,12 @@ interface SlackEventEnvelope {
   challenge?: string;
   event_id?: string;
   event_time?: number;
+  team_id?: string;
   event?: {
     type?: string;
     subtype?: string;
     bot_id?: string;
+    user?: string;
     channel?: string;
     channel_type?: string;
     text?: string;
@@ -22,6 +24,10 @@ interface SlackEventEnvelope {
 }
 
 const app = new Hono<{ Bindings: Env }>();
+
+function isAllowedSlackUser(userId: string, allowedUserId: string | undefined): boolean {
+  return Boolean(allowedUserId) && userId === allowedUserId;
+}
 
 app.get('/health', (c) => c.text('ok'));
 
@@ -53,10 +59,19 @@ app.post('/slack/events', async (c) => {
     event.channel_type === 'im' &&
     !event.subtype &&
     !event.bot_id &&
+    typeof event.user === 'string' &&
     event.channel &&
     event.ts &&
     typeof event.text === 'string';
   if (!isDirectUserMessage) return c.json({ ok: true });
+
+  // Slack署名だけでは送信者を認証できない。未許可なら情報を返さずACKだけする。
+  if (
+    payload.team_id !== c.env.SLACK_ALLOWED_TEAM_ID ||
+    !isAllowedSlackUser(event.user!, c.env.SLACK_ALLOWED_USER_ID)
+  ) {
+    return c.json({ ok: true });
+  }
 
   const urls = extractUrls(event.text!);
   if (urls.length === 0) {

@@ -34,6 +34,10 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID: string;
   SLACK_SIGNING_SECRET: string;
   SLACK_BOT_TOKEN: string;
+  /** Slack Appを許可するワークスペースのteam_id。 */
+  SLACK_ALLOWED_TEAM_ID: string;
+  /** 許可するSlack user_id。空欄は全拒否。 */
+  SLACK_ALLOWED_USER_ID: string;
   AI_GATEWAY_TOKEN: string;
   GITHUB_APP_ID: string;
   /** GitHub AppのPKCS#8 PEM形式private key。 */

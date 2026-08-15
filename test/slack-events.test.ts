@@ -43,9 +43,11 @@ describe('Slack Events API', () => {
       type: 'event_callback',
       event_id: 'Ev123',
       event_time: 1_700_000_000,
+      team_id: 'T_ALLOWED',
       event: {
         type: 'message',
         channel_type: 'im',
+        user: 'U_ALLOWED',
         channel: 'D123',
         ts: '1700000000.000100',
         text: '<https://example.com/one|one> https://example.com/two',
@@ -76,9 +78,11 @@ describe('Slack Events API', () => {
     const request = await signedSlackRequest({
       type: 'event_callback',
       event_id: 'EvNoUrl',
+      team_id: 'T_ALLOWED',
       event: {
         type: 'message',
         channel_type: 'im',
+        user: 'U_ALLOWED',
         channel: 'D123',
         ts: '1700000000.000200',
         text: 'あとで送る',
@@ -91,5 +95,57 @@ describe('Slack Events API', () => {
     const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
     expect(body.thread_ts).toBe('1700000000.000200');
     expect(body.text).toContain('URLが見つからなかった');
+  });
+
+  it('ignores a direct message from a user outside the allowlist', async () => {
+    const sent: ClipJob[] = [];
+    const env = makeEnv({
+      CLIP_QUEUE: {
+        send: async (job: ClipJob) => void sent.push(job),
+      } as unknown as Queue<ClipJob>,
+    });
+    const request = await signedSlackRequest({
+      type: 'event_callback',
+      event_id: 'EvDeniedUser',
+      team_id: 'T_ALLOWED',
+      event: {
+        type: 'message',
+        channel_type: 'im',
+        user: 'U_DENIED',
+        channel: 'D123',
+        ts: '1700000000.000300',
+        text: 'https://example.com/secret',
+      },
+    });
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('ignores a direct message from another workspace', async () => {
+    const sent: ClipJob[] = [];
+    const env = makeEnv({
+      CLIP_QUEUE: {
+        send: async (job: ClipJob) => void sent.push(job),
+      } as unknown as Queue<ClipJob>,
+    });
+    const request = await signedSlackRequest({
+      type: 'event_callback',
+      event_id: 'EvDeniedTeam',
+      team_id: 'T_OTHER',
+      event: {
+        type: 'message',
+        channel_type: 'im',
+        user: 'U_ALLOWED',
+        channel: 'D123',
+        ts: '1700000000.000400',
+        text: 'https://example.com/secret',
+      },
+    });
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(0);
   });
 });

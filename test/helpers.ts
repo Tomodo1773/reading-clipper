@@ -8,6 +8,8 @@ export function makeEnv(overrides: Partial<Env> = {}): Env {
     CLOUDFLARE_ACCOUNT_ID: 'test-account',
     SLACK_SIGNING_SECRET: 'test-signing-secret',
     SLACK_BOT_TOKEN: 'xoxb-test',
+    SLACK_ALLOWED_TEAM_ID: 'T_ALLOWED',
+    SLACK_ALLOWED_USER_ID: 'U_ALLOWED',
     AI_GATEWAY_TOKEN: 'test-aig-token',
     GITHUB_APP_ID: '12345',
     GITHUB_APP_PRIVATE_KEY: 'unused',

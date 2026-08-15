@@ -29,7 +29,7 @@ Slack
                                      └→ AI要約・Slack返信
 ```
 
-受付WorkerはSlackの署名を検証し、処理内容をCloudflare Queueへ登録して3秒以内にHTTP応答する。本文取得、AI要約、GitHub保存はQueueを受け取る処理Workerが行う。
+受付WorkerはSlackの署名、ワークスペースID、ユーザーIDを検証し、許可されたユーザーの処理内容だけをCloudflare Queueへ登録して3秒以内にHTTP応答する。本文取得、AI要約、GitHub保存はQueueを受け取る処理Workerが行う。
 
 受付と処理は論理的に分離するが、デプロイ単位は1つのWorkerとし、`fetch` ハンドラーと `queue` ハンドラーを同居させる。個人開発の規模では、secretsとデプロイ経路を1系統に保てる利点が、デプロイ単位を分ける利点を上回るため。
 
@@ -85,7 +85,7 @@ CIはGitHub Actionsで実行し、依存取得にはSocket Firewallを使う。�
 
 production branchへの直接pushは禁止し、CIを必須checkにする。これにより、CIを通過してmergeされた変更だけがGit連携からデプロイされる。
 
-Workers Builds内の依存取得にはSocket Firewallを使わない。これは共通ポリシーの明示的な例外とし、`AGENTS.md` と `CLAUDE.md` に理由を記録する。install commandは `pnpm install --frozen-lockfile` とし、lockfileの変更を拒否する。
+Workers Builds内の依存取得にはSocket Firewallを使わない。これは共通ポリシーの明示的な例外とし、`AGENTS.md` と `CLAUDE.md` に理由を記録する。Workers Buildsにはinstall commandの入力欄がないため、Build variable `SKIP_DEPENDENCY_INSTALL=1` で自動取得を無効化し、Build commandを `pnpm install --frozen-lockfile` にしてlockfileの変更を拒否する。
 
 アプリのリポジトリにはcustom domainやroute設定を置かない。ドメインの実値はGit管理外から渡す。
 
@@ -115,7 +115,14 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 4. X APIキーを用意する。**完了**（Bearer Token取得済み。X APIクレジット購入と支出上限設定は未完了）
 5. Firecrawl APIキーを取得する。**完了**
 6. Gemini APIキーを用意する。**完了**
-7. Slack App/Botを作成し、URLを受け付ける設定を用意する。
+7. Slack App/Botを作成し、URLを受け付ける設定を用意する。**完了**
+   1. App HomeのMessages Tabを有効化し、ユーザーからのメッセージ送信を許可する。**完了**
+   2. Bot Token Scopesに `chat:write` と `im:history` を追加する。**完了**
+   3. Socket Modeを無効にする。**完了**
+   4. Event SubscriptionsのRequest URLを `https://<Workerの公開ホスト>/slack/events` にし、Bot Event `message.im` を購読する。**完了**
+   5. Signing SecretとBot User OAuth Tokenを、それぞれ `SLACK_SIGNING_SECRET` と `SLACK_BOT_TOKEN` としてWorkerへ登録する。**完了**
+
+Socket Modeが有効な間、SlackはイベントをWebSocketでのみ配信し、Request URLへHTTP POSTを送らない。URL検証だけは行われるためRequest URLは `Verified` と表示され、購読設定も正しく見えたまま、DMを送ってもWorkerには何も届かない。Request URLの入力欄もロックされる。設定画面の目視では原因が分からないため、`settings.socket_mode_enabled` をApp Manifestで確認する。
 8. Cloudflareのリソースを用意する。**完了**
    1. `pnpm wrangler queues create reading-clipper-clips` と `pnpm wrangler queues create reading-clipper-clips-dlq`。**完了**
    2. `CLOUDFLARE_ACCOUNT_ID` と `CLOUDFLARE_API_TOKEN` を設定して `pnpm setup:aigw` を実行し、AI Gatewayを作成する。**完了**
@@ -124,9 +131,24 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
    5. runtime secretsを `pnpm wrangler secret put <NAME>` で登録する。対象は `src/types.ts` の `Env` を参照する。**完了**
 
 X APIは認証情報を取得しただけでは実際のAPI呼び出しまで完了しない。初回のX取得テスト前に、Developer Consoleでクレジットを購入し、支出上限を設定する。[X API pricing](https://docs.x.com/x-api/getting-started/pricing)
+
+受信Workerは、Slack署名だけでなく `team_id` と `event.user` もallowlistで検証する。`SLACK_ALLOWED_TEAM_ID` に許可するワークスペースのIDを、`SLACK_ALLOWED_USER_ID` に許可するユーザーIDを1件だけ登録する。許可されていないメッセージはSlackへ返信せず、Queueにも登録しない。設定値が空欄の場合も全拒否する。
+
+```text
+pnpm wrangler secret put SLACK_ALLOWED_TEAM_ID
+pnpm wrangler secret put SLACK_ALLOWED_USER_ID
+```
+
+初期版は未配布の単一ワークスペース用Slack Appを前提とする。Slack Appの配布設定を変更して複数ワークスペースで使う場合は、ワークスペースごとのOAuth認証とBot token管理を別途設計する。
 9. ソースコードをpublic GitHub repositoryへpushする。**完了**
-10. CloudflareダッシュボードでWorkers BuildsのGit連携を手動で接続する。
-11. CI通過後、production branchへのmergeでWorkers Buildsがデプロイする。
+10. CloudflareダッシュボードでWorkers BuildsのGit連携を手動で接続する。**完了**
+    1. GitHub App `Cloudflare Workers and Pages` をインストールし、`Tomodo1773/reading-clipper` だけにRepository accessを許可する。**完了**
+    2. Production branchを `main`、Root directoryを `/` にする。**完了**
+    3. Build variableを `SKIP_DEPENDENCY_INSTALL=1`、Build commandを `pnpm install --frozen-lockfile`、Deploy commandを `pnpm deploy` にする。**完了**
+    4. 非production branchの自動Buildは無効にし、非production branch deploy commandは既定の `npx wrangler versions upload` のままにする。**完了**
+11. CI通過後、production branchへのmergeでWorkers Buildsがデプロイする。**完了**
+
+Slackイベント受信、Queue処理、本文取得、GitHub保存、AI要約、Slackへのスレッド返信までを通すE2Eを確認済み。Qiita、X、一般Webの3系統それぞれでの取得確認と要約内容の確認は未完了。
 
 ## URL別の取得方針
 
@@ -194,6 +216,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 この設計書の方針を変更した判断は、[`docs/adr/`](docs/adr/) にADRとして残す。README.mdには結論と要約だけを書き、根拠・代替案・失うものはADR側に置く。
 
 - [ADR 0001: Cloudflareのインフラ管理をOpenTofuではなくWranglerに寄せる](docs/adr/0001-wrangler-over-opentofu.md)
+- [ADR 0002: Slack受信をワークスペースとユーザーのallowlistで制限する](docs/adr/0002-slack-allowlist.md)
 
 ## 確認済みの外部仕様
 
