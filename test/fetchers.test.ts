@@ -120,6 +120,11 @@ describe('source fetchers', () => {
     const result = await fetchContent('https://example.com/article', makeEnv());
     expect(result).toMatchObject({ source: 'web', title: 'General', author: 'Bob' });
     const requestBody = JSON.parse(String(spy.mock.calls[0]?.[1]?.body));
-    expect(requestBody).toMatchObject({ formats: ['markdown'], onlyMainContent: true, maxAge: 0 });
+    // 依存している要件だけを送り、それ以外はFirecrawlの既定に任せる。
+    expect(requestBody).toEqual({
+      url: 'https://example.com/article',
+      formats: ['markdown'],
+      onlyMainContent: true,
+    });
   });
 });

@@ -471,10 +471,11 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
         url: url.toString(),
         formats: ['markdown'],
         onlyMainContent: true,
-        maxAge: 0,
       }),
     },
-    60_000,
+    // Firecrawl側のtimeoutは既定で60秒。同じ値にすると必ずこちらが先に中断し、
+    // Firecrawlが返す失敗理由を受け取れなくなるため、余裕を持たせる。
+    75_000,
     'fetch',
   );
   assertOk(response, 'fetch');
