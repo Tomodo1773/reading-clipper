@@ -1,4 +1,4 @@
-export type ClipSource = 'qiita' | 'x' | 'web';
+export type ClipSource = 'qiita' | 'zenn' | 'x' | 'web';
 
 /** SlackからQueueへ渡す、1件ぶんのクリップ処理。 */
 export interface ClipJob {

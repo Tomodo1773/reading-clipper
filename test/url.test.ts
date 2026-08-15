@@ -24,12 +24,37 @@ describe('URL handling', () => {
     expect(qiita.toString()).toBe('https://qiita.com/u/items/abc');
     expect(classifyUrl(qiita)).toBe('qiita');
 
+    const zenn = canonicalizeUrl('http://www.zenn.dev/alice/articles/abc123def456/?utm_source=s');
+    expect(zenn.toString()).toBe('https://zenn.dev/alice/articles/abc123def456');
+    expect(classifyUrl(zenn)).toBe('zenn');
+
     expect(
       canonicalizeUrl('https://x.com/user/status/123/photo/1?ref=share').toString(),
     ).toBe('https://x.com/i/web/status/123');
     expect(canonicalizeUrl('http://example.com/a#part').toString()).toBe(
       'http://example.com/a',
     );
+  });
+
+  it('treats only Zenn articles as a Zenn source', () => {
+    // publicationの記事もユーザーの記事と同じ `/{name}/articles/{slug}` になる。
+    expect(classifyUrl(canonicalizeUrl('https://zenn.dev/estie/articles/64b80da2fbf175'))).toBe(
+      'zenn',
+    );
+    expect(canonicalizeUrl('https://zenn.dev/alice/articles/abc123def456.md').toString()).toBe(
+      'https://zenn.dev/alice/articles/abc123def456',
+    );
+    for (const raw of [
+      'https://zenn.dev/alice/books/my-book',
+      'https://zenn.dev/alice/books/my-book/viewer/chapter1',
+      'https://zenn.dev/alice/scraps/abc123def456',
+      'https://zenn.dev/alice',
+      'https://zenn.dev/topics/typescript',
+      'https://zenn.dev/articles/abc123def456',
+      'https://example.com/alice/articles/abc123def456',
+    ]) {
+      expect(classifyUrl(canonicalizeUrl(raw))).toBe('web');
+    }
   });
 
   it('uses a deterministic, readable GitHub path', async () => {

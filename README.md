@@ -148,15 +148,18 @@ pnpm wrangler secret put SLACK_ALLOWED_USER_ID
     4. 非production branchの自動Buildは無効にし、非production branch deploy commandは既定の `npx wrangler versions upload` のままにする。**完了**
 11. CI通過後、production branchへのmergeでWorkers Buildsがデプロイする。**完了**
 
-Slackイベント受信、Queue処理、本文取得、GitHub保存、AI要約、Slackへのスレッド返信までを通すE2Eを確認済み。Qiita、X、一般Webの3系統それぞれでの取得確認と要約内容の確認は未完了。
+Slackイベント受信、Queue処理、本文取得、GitHub保存、AI要約、Slackへのスレッド返信までを通すE2Eを確認済み。Qiita、Zenn、X、一般Webの4系統それぞれでの取得確認と要約内容の確認は未完了。
 
 ## URL別の取得方針
 
 | 対象 | 初期方針 | 現時点の扱い |
 |---|---|---|
 | Qiitaの記事 | 記事URL末尾に `.md` を付けて取得 | Qiita公式ブログで提供方法を確認済み |
+| Zennの記事 | （当初はその他のWebページに含めていた） | 非公式APIの `body_html` を自前でMarkdownへ変換する（[ADR 0003](docs/adr/0003-zenn-unofficial-api.md)） |
 | Xの投稿・記事 | X APIを利用 | `article`、`note_tweet`、通常本文の順で取得する |
 | その他のWebページ | Firecrawlを利用 | Scrape APIがMarkdownを返せることを確認済み |
+
+Zennには記事URL末尾に `.md` を付ける手段も、Markdown原稿を返すAPIも無い。対象は記事だけとし、本（`/books/`）とスクラップ（`/scraps/`）は汎用Web扱いのままにする。
 
 ## アプリの動作
 
@@ -205,7 +208,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 
 ## 初期バージョンの完了条件
 
-- Slackへ送ったQiita、X、一般WebのURLが、それぞれ定めた取得方法へ振り分けられる。
+- Slackへ送ったQiita、Zenn、X、一般WebのURLが、それぞれ定めた取得方法へ振り分けられる。
 - 取得した内容がMarkdownとして指定のGitHubリポジトリへ保存される。
 - Slackへ、主な結論と内容を含む2〜4文の要約が返る。
 - Slackの返信から、保存に成功したか失敗したかを判別できる。
@@ -217,6 +220,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 
 - [ADR 0001: Cloudflareのインフラ管理をOpenTofuではなくWranglerに寄せる](docs/adr/0001-wrangler-over-opentofu.md)
 - [ADR 0002: Slack受信をワークスペースとユーザーのallowlistで制限する](docs/adr/0002-slack-allowlist.md)
+- [ADR 0003: Zennの記事はZennの非公式APIから取得してMarkdownへ変換する](docs/adr/0003-zenn-unofficial-api.md)
 
 ## 確認済みの外部仕様
 

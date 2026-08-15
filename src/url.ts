@@ -36,6 +36,7 @@ export function canonicalizeUrl(rawUrl: string): URL {
     url.hostname = 'x.com';
   }
   if (url.hostname === 'www.qiita.com') url.hostname = 'qiita.com';
+  if (url.hostname === 'www.zenn.dev') url.hostname = 'zenn.dev';
 
   const source = classifyUrl(url);
   if (source !== 'web') {
@@ -43,7 +44,7 @@ export function canonicalizeUrl(rawUrl: string): URL {
     url.search = '';
     url.pathname = url.pathname.replace(/\/$/, '');
   }
-  if (source === 'qiita') url.pathname = url.pathname.replace(/\.md$/i, '');
+  if (source === 'qiita' || source === 'zenn') url.pathname = url.pathname.replace(/\.md$/i, '');
   if (source === 'x') url.pathname = `/i/web/status/${extractXPostId(url)}`;
   return url;
 }
@@ -52,8 +53,16 @@ export function classifyUrl(url: URL): ClipSource {
   if (url.hostname === 'qiita.com' && /^\/[^/]+\/items\/[^/]+(?:\.md)?\/?$/.test(url.pathname)) {
     return 'qiita';
   }
+  // 本（/books/）やスクラップ（/scraps/）は記事と構造が違うため、記事だけを対象にする。
+  if (url.hostname === 'zenn.dev' && extractZennArticleSlug(url)) return 'zenn';
   if (url.hostname === 'x.com' && extractXPostId(url)) return 'x';
   return 'web';
+}
+
+/** `zenn.dev/{user|publication}/articles/{slug}` のslugを返す。 */
+export function extractZennArticleSlug(url: URL): string | undefined {
+  const match = url.pathname.match(/^\/[^/]+\/articles\/([^/]+?)(?:\.md)?\/?$/i);
+  return match?.[1];
 }
 
 export function extractXPostId(url: URL): string | undefined {

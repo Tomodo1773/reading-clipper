@@ -38,7 +38,7 @@ export function renderClipMarkdown(options: {
     .map(([key, value]) => `${key}: ${frontMatterValue(value)}`)
     .join('\n');
   const summaryText = summary
-    ? summary.sentences.join('\n\n')
+    ? summary.text
     : 'AI要約の生成に失敗したため、本文のみ保存した。';
   return `---\n${frontMatter}\n---\n\n# ${safeHeading(content.title)}\n\n[元URL](${content.canonicalUrl})\n\n## 要約\n\n${summaryText}\n\n## 取得内容\n\n${content.markdown.trim()}\n`;
 }
@@ -59,10 +59,7 @@ export function parseStoredClip(markdown: string): StoredClip {
   }
   const summaryMatch = markdown.match(/\n## 要約\n\n([\s\S]*?)\n\n## 取得内容\n/);
   const summaryStatus = values.get('summary_status');
-  const summaryParts = summaryMatch?.[1]
-    ?.split(/\n\n+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const summaryText = summaryMatch?.[1]?.trim();
   return {
     slackEventId:
       typeof values.get('slack_event_id') === 'string'
@@ -70,10 +67,7 @@ export function parseStoredClip(markdown: string): StoredClip {
         : undefined,
     summaryStatus:
       summaryStatus === 'succeeded' || summaryStatus === 'failed' ? summaryStatus : undefined,
-    summary:
-      summaryStatus === 'succeeded' && summaryParts?.length === 2
-        ? { sentences: [summaryParts[0]!, summaryParts[1]!] }
-        : undefined,
+    summary: summaryStatus === 'succeeded' && summaryText ? { text: summaryText } : undefined,
     fetchComplete:
       typeof values.get('fetch_complete') === 'boolean'
         ? (values.get('fetch_complete') as boolean)

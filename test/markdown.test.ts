@@ -20,13 +20,13 @@ describe('stored Markdown', () => {
         markdown: '# Body',
         complete: false,
       },
-      summary: { sentences: ['テーマと結論。', '主要な内容。'] },
+      summary: { text: 'ああ、Workerの記事ね。要するに重い処理はQueueへ逃がせってことよ。' },
     });
     expect(markdown).toContain('summary_status: "succeeded"');
     expect(parseStoredClip(markdown)).toEqual({
       slackEventId: 'Ev123',
       summaryStatus: 'succeeded',
-      summary: { sentences: ['テーマと結論。', '主要な内容。'] },
+      summary: { text: 'ああ、Workerの記事ね。要するに重い処理はQueueへ逃がせってことよ。' },
       fetchComplete: false,
     });
   });

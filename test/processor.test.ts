@@ -54,7 +54,7 @@ describe('clip processor', () => {
             {
               message: {
                 content: JSON.stringify({
-                  sentences: ['Workerの非同期処理について説明している。', 'Queue分離が主な結論だ。'],
+                  summary: 'Workerの非同期処理の話ね。要するに重い処理はQueueへ分けなさい、ってことよ。',
                 }),
               },
             },
@@ -79,9 +79,9 @@ describe('clip processor', () => {
 
     expect(savedMarkdown).toContain('slack_event_id: "EvProcess"');
     expect(savedMarkdown).toContain('summary_status: "succeeded"');
-    expect(savedMarkdown).toContain('Queue分離が主な結論だ。');
+    expect(savedMarkdown).toContain('要するに重い処理はQueueへ分けなさい、ってことよ。');
     expect(slackBody?.thread_ts).toBe(job.slackThreadTs);
-    expect(slackBody?.text).toContain('GitHubへの保存に成功した');
+    expect(slackBody?.text).toContain('GitHubには保存しておいたわよ');
   });
 
   it('saves the body without a summary on the final attempt', async () => {
@@ -113,7 +113,7 @@ describe('clip processor', () => {
 
     await processClipJob(job, makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), 4);
     expect(savedMarkdown).toContain('summary_status: "failed"');
-    expect(slackText).toContain('AI要約には失敗したけれど');
+    expect(slackText).toContain('要約の方は失敗したけれど');
   });
 
   it('reuses a stored result for the same Slack event', async () => {
@@ -126,7 +126,7 @@ describe('clip processor', () => {
         markdown: '# Stored',
         complete: true,
       },
-      summary: { sentences: ['保存済みの要約。', '保存済みの根拠。'] },
+      summary: { text: '保存済みの記事ね。要するにもう一度取りに行く必要はないってことよ。' },
     });
     const requested: string[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

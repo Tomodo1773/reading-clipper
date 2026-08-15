@@ -107,15 +107,15 @@ export async function processClipJob(job: ClipJob, env: Env, attempts: number): 
 export function failureReply(error: ClipError): string {
   switch (error.stage) {
     case 'validation':
-      return 'URLを処理できなかったよ。対応しているHTTP(S) URLを送り直してね。';
+      return 'そのURL、私には扱えないわ。HTTP(S)のURLを送り直してちょうだい。';
     case 'fetch':
-      return 'URLの内容を取得できなかったよ。取得できていないため、保存も要約もしていないわ。';
+      return '中身が取れなかったわ。取れていないものを保存も要約もするわけにはいかないから、今回は何も残していないわよ。';
     case 'summary':
-      return 'AI要約を生成できなかったよ。本文もまだ保存していないため、時間を置いて送り直してね。';
+      return '要約を作れなかったわ。本文もまだ保存していないから、少し時間を置いて送り直してちょうだい。';
     case 'github':
-      return 'GitHubへの保存に失敗したよ。保存成功とは扱っていないので、設定を確認して送り直してね。';
+      return 'GitHubへの保存に失敗したわ。成功したことにはしないから、設定を確認して送り直してね。';
     case 'slack':
-      return 'Slackへの結果返信に失敗したよ。処理自体は完了している可能性があるため、GitHubも確認してね。';
+      return 'Slackへの返信に失敗したわ。処理自体は終わっているかもしれないから、GitHubの方も見ておいてちょうだい。';
   }
 }
 
