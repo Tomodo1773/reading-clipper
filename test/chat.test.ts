@@ -83,6 +83,39 @@ function toolCallReply(url: string): Response {
   ]);
 }
 
+/** Geminiがサーバー側で検索を実行したときの応答。1回のgenerateContentに全部入る。 */
+function groundedReply(text: string): Response {
+  return modelResponse(
+    [
+      {
+        toolCall: { toolType: 'google_search', id: 'search-1', args: { queries: ['hono latest'] } },
+        thoughtSignature: 'sig-search',
+      },
+      {
+        toolResponse: {
+          toolType: 'google_search',
+          id: 'search-1',
+          response: { results: [{ title: 'Hono', snippet: 'v4' }] },
+        },
+      },
+      { text },
+    ],
+    {
+      groundingMetadata: {
+        webSearchQueries: ['hono latest'],
+        groundingChunks: [
+          {
+            web: {
+              uri: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc',
+              title: 'hono.dev',
+            },
+          },
+        ],
+      },
+    },
+  );
+}
+
 describe('chat turn', () => {
   it('saves through the tool and answers from the body it returned', async () => {
     const recorded = mockWorld([
@@ -200,6 +233,92 @@ describe('chat turn', () => {
     expect(recorded.savedPath).toBe('');
     // 過去のツール結果は本文ごとモデルへ渡る。
     expect(JSON.stringify(recorded.modelBodies[0])).toContain('Queueで重い処理を分離する。');
+  });
+
+  it('finishes a grounded answer in a single model call', async () => {
+    // 検索はGemini側で実行され、同じ応答にtoolCall/toolResponseとして載る。
+    // providerExecutedなのでAI SDKのループは回らず、stepを消費しない。
+    const recorded = mockWorld([groundedReply('Hono v4が最新よ。Honoの公式ドキュメントに出ていたわ。')]);
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'Honoの最新バージョンっていくつ？',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(recorded.modelBodies).toHaveLength(1);
+    expect(turn.reply).toContain('Hono v4が最新よ');
+    expect(turn.appended.map((message) => message.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('sends google_search and save_clip together with VALIDATED tool config', async () => {
+    // Gemini 3世代でしか併用は成立しない。AI_MODELを2.x系へ落とすとsave_clipが黙って消えるため、
+    // 実行時チェックの代わりにここで検出する。
+    const recorded = mockWorld([modelResponse([{ text: 'そうね。' }])]);
+
+    await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'おはよう',
+      receivedAt: RECEIVED_AT,
+    });
+
+    const body = recorded.modelBodies[0] as {
+      tools?: Array<Record<string, unknown>>;
+      toolConfig?: { functionCallingConfig?: { mode?: string } };
+    };
+    expect(body.tools?.some((entry) => 'googleSearch' in entry)).toBe(true);
+    const functionTools = body.tools?.find((entry) => 'functionDeclarations' in entry) as
+      | { functionDeclarations: Array<{ name: string }> }
+      | undefined;
+    expect(functionTools?.functionDeclarations.map((declaration) => declaration.name)).toContain(
+      'save_clip',
+    );
+    expect(body.toolConfig?.functionCallingConfig?.mode).toBe('VALIDATED');
+  });
+
+  it('keeps grounded tool parts in history and sends them back on the next turn', async () => {
+    mockWorld([groundedReply('Hono v4が最新よ。')]);
+
+    const first = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'Honoの最新バージョンっていくつ？',
+      receivedAt: RECEIVED_AT,
+    });
+
+    // Durable Objectへ入るのはJSON。往復させてから次のターンへ渡す。
+    const stored = first.appended.map(
+      (message) => JSON.parse(JSON.stringify(message)) as ModelMessage,
+    );
+
+    const recorded = mockWorld([modelResponse([{ text: 'ええ、さっき調べたとおりよ。' }])]);
+    await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: stored,
+      userText: 'ほんとに？',
+      receivedAt: RECEIVED_AT,
+    });
+
+    const modelTurn = (
+      recorded.modelBodies[0] as { contents: Array<{ role: string; parts: unknown[] }> }
+    ).contents.find((content) => content.role === 'model');
+    const parts = (modelTurn?.parts ?? []) as Array<{
+      toolCall?: { toolType: string; id: string };
+      toolResponse?: { toolType: string; id: string };
+      thoughtSignature?: string;
+    }>;
+    expect(parts.find((part) => part.toolCall)?.toolCall).toMatchObject({
+      toolType: 'google_search',
+      id: 'search-1',
+    });
+    // server tool call側の署名も往復する。落とすとfunctionCall版と同じくHTTP 400になる（ADR 0008）。
+    expect(parts.find((part) => part.toolCall)?.thoughtSignature).toBe('sig-search');
+    expect(parts.find((part) => part.toolResponse)?.toolResponse).toMatchObject({
+      toolType: 'google_search',
+      id: 'search-1',
+    });
   });
 
   it('reports a permanent fetch failure as tool data instead of saving', async () => {

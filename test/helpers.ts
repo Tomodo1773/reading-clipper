@@ -1,3 +1,4 @@
+import { env as testEnv } from 'cloudflare:test';
 import type { ThreadAgent } from '../src/thread';
 import type { ChatJob, Env } from '../src/types';
 
@@ -10,7 +11,9 @@ export function makeEnv(overrides: Partial<Env> = {}): Env {
       },
     } as unknown as DurableObjectNamespace<ThreadAgent>,
     AI_GATEWAY_ID: 'reading-clipper-summarizer',
-    AI_MODEL: 'gemini-3.7-flash',
+    // ここだけは`wrangler.jsonc`の`vars`から取る。google_searchとsave_clipの併用を守る
+    // 回帰テストは、実際にデプロイされるモデル名で走らないと意味がない（ADR 0009）。
+    AI_MODEL: testEnv.AI_MODEL,
     CLOUDFLARE_ACCOUNT_ID: 'test-account',
     SLACK_SIGNING_SECRET: 'test-signing-secret',
     SLACK_BOT_TOKEN: 'xoxb-test',
@@ -34,10 +37,13 @@ export function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
-/** GeminiのgenerateContent応答。partsにテキストかfunctionCallを並べる。 */
-export function modelResponse(parts: unknown[]): Response {
+/**
+ * GeminiのgenerateContent応答。partsにテキストかfunctionCallを並べる。
+ * `candidate` はcandidates[0]へマージする（groundingMetadataを足すため）。
+ */
+export function modelResponse(parts: unknown[], candidate: Record<string, unknown> = {}): Response {
   return jsonResponse({
-    candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }],
+    candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP', ...candidate }],
     usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
   });
 }

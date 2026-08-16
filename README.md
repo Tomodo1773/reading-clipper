@@ -25,7 +25,7 @@ Slack
   ↓
 受付Worker ──→ Cloudflare Queue ──→ 処理Worker
   ├→ 受け取った印に 👀                ├→ ThreadAgent (Durable Object) から会話履歴を読む
-  └→ 3秒以内にHTTP応答                ├→ AIとのやり取り
+  └→ 3秒以内にHTTP応答                ├→ AIとのやり取り（google_searchはGemini側で実行）
                                       │   └→ save_clipツール
                                       │       （URL別の取得 → Markdown化 → GitHub保存）
                                       ├→ ThreadAgent へ1ターンぶんを追記
@@ -178,6 +178,7 @@ Zennには記事URL末尾に `.md` を付ける手段も、Markdown原稿を返�
 - URLだけを送れば保存して要約が返る。文を添えれば会話になる。URLが含まれていても、感想を聞いているのか保存してほしいのかはAIが判断する。
 - スレッドに続けて質問すると、そのスレッドで保存した記事の内容を踏まえて答える。記事は取得し直さない。
 - スレッド内の返信は親メッセージに紐づく。別のメッセージから始めれば別の会話になる。
+- 保存した記事と関係のない、最新の事実を聞かれたときはWebを検索して答える。保存済み記事についての質問では検索せず、手元の本文を使う（[ADR 0009](docs/adr/0009-google-search-grounding.md)）。
 - 保存先は `clips/{host}/{記事タイトル}.md` とする。ファイル名は記事タイトルだけから作り、URLハッシュは付けない。日本語はそのまま残し、Windowsで使えない文字・予約デバイス名・255バイトの上限だけを潰す。同一ホスト内でファイル名が衝突した場合は上書きする（[ADR 0005](docs/adr/0005-title-based-file-name-and-plain-body.md)）。
 - 保存するMarkdownは、フロントマターの直下に取得した本文をそのまま置く。見出しやセクションを足さず、AI要約も保存しない。要約はSlackへ返すためだけに使う。
 - 同じURLを新しく送ると再取得して同じファイルを更新する。ただし汎用Web経路はFirecrawlの既定のキャッシュに任せるため、最大2日間は前回取得した内容が返りうる。速度と成功率を優先した意図的な挙動で、常に最新へ更新することは保証しない。
@@ -204,12 +205,13 @@ GeminiはCloudflare AI GatewayのGoogle AI Studioパススルー経由で呼び�
 - 取得が不完全な場合は、その事実
 - GitHubへの保存成否
 
+会話の中で事実の裏取りが要るときは、GeminiのGoogle検索グラウンディング（provider-executedな `google_search`）で調べてから答える。検索するかどうかはAIが判断し、アプリ側では判定しない。出典はアプリが組み立てず、AIがサイト名や記事名として文中に添える。グラウンディングが返すURLは期限付きのリダイレクトURLなので、そのまま貼らせない。この形はGemini API追加利用規約が求めるSearch Suggestionsの表示を満たしておらず、個人利用の範囲に限って未準拠を受け入れる（[ADR 0009](docs/adr/0009-google-search-grounding.md)）。
+
 ## 初期バージョンに含めないもの
 
 - 未読・既読状態の管理
 - 未読記事の定期通知と推薦
 - 保存済み記事の横断検索（同じスレッド内での質問応答は含む）
-- Web検索
 - GitHub上のクリップの整理（リネーム、削除）
 - 興味傾向の分析
 
@@ -246,6 +248,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [ADR 0006: Slackの入力をすべてAIへ渡し、保存をツールにする](docs/adr/0006-agent-with-save-tool.md)
 - [ADR 0007: スレッドの会話履歴をDurable Objectにツール結果ごと持つ](docs/adr/0007-thread-history-in-durable-object.md)
 - [ADR 0008: AI SDKに乗せ、モデルの呼び出しをDurable Objectの外へ出す](docs/adr/0008-ai-sdk-and-model-calls-outside-the-durable-object.md)
+- [ADR 0009: Web検索はGeminiのGoogle検索グラウンディングで行う](docs/adr/0009-google-search-grounding.md)
 
 ## 確認済みの外部仕様
 
@@ -265,6 +268,8 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [AI GatewayのGoogle AI Studioプロバイダ](https://developers.cloudflare.com/ai-gateway/usage/providers/google-ai-studio/) — Stored Keys（BYOK）なら `cf-aig-authorization` だけで認証が通り、Gemini APIキーをリクエストに載せる必要がない
 - [Gemini Thought Signatures](https://ai.google.dev/gemini-api/docs/thought-signatures) — 受け取った署名をそのまま次のリクエストへ返す必要がある。公式SDKを使わず履歴を組み立てる場合は自分で扱う
 - [AI SDK Tool Calling](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling) — `stopWhen` でツール実行の往復を回し、`responseMessages` を会話へ追記する
+- [Grounding with Google Search](https://ai.google.dev/gemini-api/docs/google-search) — 検索はGemini側で実行され、結果は同じ応答に織り込まれる
+- [Gemini API追加利用規約](https://ai.google.dev/gemini-api/terms) — グラウンディング利用時はSearch Suggestionsをそのまま表示することを求め、結果の再配信やキャッシュを制限している（エンドユーザーが閲覧するチャット履歴としての保存は例外）
 - [Cloudflare AI Gateway Logging](https://developers.cloudflare.com/ai-gateway/observability/logging/) — プロンプトと応答本文の保存は既定で有効
 - [Cloudflare AI Gateway Authentication](https://developers.cloudflare.com/ai-gateway/configuration/authentication/) — トークンは `AI Gateway Run` 権限のAPI tokenで、表示は一度きり
 - [Cloudflare AI Gateway BYOK](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/) — シークレット名は `{gateway_id}_{provider_slug}_{alias}` 形式

@@ -1,3 +1,4 @@
+import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { asClipError } from './errors';
@@ -37,8 +38,16 @@ async function saveClip(env: Env, rawUrl: string, receivedAt: string) {
  * 失敗はすべてツール結果として返し、モデルにその事実を伝えさせる（ADR 0008）。
  * 例外を投げてもAI SDKがツールエラーに変えてループを続けるため、Queueの再試行には乗らない。
  */
-export function createTools(env: Env, receivedAt: string) {
+export function createTools(env: Env, receivedAt: string, google: GoogleGenerativeAIProvider) {
   return {
+    /**
+     * Web検索。Geminiがサーバー側で実行して結果を同じ応答に織り込むため、AI SDKのstepを消費しない。
+     * キー名は`google_search`に揃える（`@ai-sdk/google`のドキュメントがそう求めている。
+     * 実行時は`tool.id`で解決されるので、キー名を変えても送信内容は変わらない）。
+     * `save_clip`との併用はGemini 3世代でのみ成立する。2.x以下では`functionDeclarations`が
+     * warningだけ出して落ちる（`wrangler.jsonc`の`AI_MODEL`を参照）。
+     */
+    google_search: google.tools.googleSearch({}),
     save_clip: tool({
       description: [
         'URLの記事を取得してMarkdownに整え、ユーザーのGitHubリポジトリへ保存する。',

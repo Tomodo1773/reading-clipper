@@ -58,6 +58,9 @@
   "vars": {
     "AI_GATEWAY_ID": "reading-clipper-summarizer",
     // モデルはsecretではない。AI Gateway未対応時もコード変更なしで差し替えられるようbindingにする。
+    // ここはGemini 3世代であること。2.x以下にすると`@ai-sdk/google`がgoogle_searchと
+    // save_clipの併用を認めず、save_clipのfunctionDeclarationsをwarningだけ出して落とす
+    // （＝保存が黙って効かなくなる）。
     "AI_MODEL": "gemini-3.7-flash"
   }
 }
