@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ClipError } from '../src/errors';
 import { handleQueueMessage } from '../src/processor';
-import type { ThreadAgent } from '../src/thread';
+import type { ThreadAgent, TurnOutcome } from '../src/thread';
 import type { ChatJob } from '../src/types';
 import { jsonResponse, makeEnv } from './helpers';
 
@@ -16,12 +15,21 @@ const job: ChatJob = {
 
 afterEach(() => vi.restoreAllMocks());
 
-function threadStub(handle: () => Promise<void>): DurableObjectNamespace<ThreadAgent> {
+function threadStub(handle: () => Promise<TurnOutcome>): DurableObjectNamespace<ThreadAgent> {
   return {
     idFromName: () => 'thread-id',
     get: () => ({ handle }),
   } as unknown as DurableObjectNamespace<ThreadAgent>;
 }
+
+/** DOはRPC境界で例外の型を保てないため、失敗を値で返す。 */
+const gatewayFailure: TurnOutcome = {
+  ok: false,
+  stage: 'chat',
+  retryable: true,
+  status: 503,
+  message: 'gateway is unhappy',
+};
 
 describe('queue handler', () => {
   it('acks a permanently invalid message after notifying Slack', async () => {
@@ -43,7 +51,7 @@ describe('queue handler', () => {
   });
 
   it('hands a valid message to the thread keyed by channel and thread_ts', async () => {
-    const handle = vi.fn(async () => undefined);
+    const handle = vi.fn(async (): Promise<TurnOutcome> => ({ ok: true }));
     const seen: string[] = [];
     const namespace = {
       idFromName: (name: string) => {
@@ -71,9 +79,7 @@ describe('queue handler', () => {
       }
       throw new Error(`unexpected request: ${String(input)}`);
     });
-    const namespace = threadStub(async () => {
-      throw new ClipError('gateway is unhappy', 'chat', true, 503);
-    });
+    const namespace = threadStub(async () => gatewayFailure);
     const ack = vi.fn();
     const retry = vi.fn();
     const message = { body: job, attempts: 4, ack, retry } as unknown as Message<ChatJob>;
@@ -87,9 +93,7 @@ describe('queue handler', () => {
 
   it('keeps retrying quietly while attempts remain', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ ok: true }));
-    const namespace = threadStub(async () => {
-      throw new ClipError('gateway is unhappy', 'chat', true, 503);
-    });
+    const namespace = threadStub(async () => gatewayFailure);
     const retry = vi.fn();
     const message = { body: job, attempts: 1, ack: vi.fn(), retry } as unknown as Message<ChatJob>;
 

@@ -32,7 +32,12 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
   const job = message.body;
   try {
     validateJob(job);
-    await env.THREAD.get(env.THREAD.idFromName(`${job.slackChannel}:${job.slackThreadTs}`)).handle(job);
+    const outcome = await env.THREAD
+      .get(env.THREAD.idFromName(`${job.slackChannel}:${job.slackThreadTs}`))
+      .handle(job);
+    if (!outcome.ok) {
+      throw new ClipError(outcome.message, outcome.stage, outcome.retryable, outcome.status);
+    }
     message.ack();
   } catch (error) {
     const clipError = asClipError(error, 'validation');

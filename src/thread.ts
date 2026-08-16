@@ -1,7 +1,16 @@
 import { DurableObject } from 'cloudflare:workers';
 import { type ChatMessage, runChatTurn } from './chat';
+import { asClipError, type ProcessingStage } from './errors';
 import { postSlackMessage } from './slack';
 import type { ChatJob, Env } from './types';
+
+/**
+ * ターンの結果。例外ではなく値で返す。
+ * RPC境界を越えると`ClipError`のクラス情報が落ち、stage/retryable/statusが失われるため。
+ */
+export type TurnOutcome =
+  | { ok: true }
+  | { ok: false; stage: ProcessingStage; retryable: boolean; status?: number; message: string };
 
 /**
  * Slackのスレッド1本ぶんの会話。`{channel}:{thread_ts}` で引く（ADR 0007）。
@@ -37,16 +46,25 @@ export class ThreadAgent extends DurableObject<Env> {
     });
   }
 
-  async handle(job: ChatJob): Promise<void> {
+  async handle(job: ChatJob): Promise<TurnOutcome> {
     const run = this.chain.then(
       () => this.runTurn(job),
       () => this.runTurn(job),
     );
-    this.chain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    this.chain = run.catch(() => undefined);
+    try {
+      await run;
+      return { ok: true };
+    } catch (error) {
+      const clipError = asClipError(error, 'chat');
+      return {
+        ok: false,
+        stage: clipError.stage,
+        retryable: clipError.retryable,
+        status: clipError.status,
+        message: clipError.message,
+      };
+    }
   }
 
   private history(): ChatMessage[] {

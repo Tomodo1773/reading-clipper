@@ -1,7 +1,7 @@
-import { ClipError } from './errors';
+import { ClipError, isRetryableStatus } from './errors';
 import { runTool, TOOL_DEFINITIONS } from './tools';
 import type { Env } from './types';
-import { asRecord, assertOk, fetchWithTimeout, stringField } from './utils';
+import { asRecord, fetchWithTimeout, stringField } from './utils';
 
 const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通して「要するに何なのか」を教えてくれる、面倒見のいい年上のお姉さんです。SlackのDMで、一人の相手とだけ話しています。
 
@@ -97,7 +97,16 @@ async function callModel(env: Env, messages: ChatMessage[]): Promise<ChatMessage
     60_000,
     'chat',
   );
-  assertOk(response, 'chat');
+  if (!response.ok) {
+    // ステータスだけでは何を拒否されたか分からない。ゲートウェイの返す理由をログへ残す。
+    const detail = (await response.text().catch(() => '')).slice(0, 600);
+    throw new ClipError(
+      `AI gateway returned ${response.status}: ${detail}`,
+      'chat',
+      isRetryableStatus(response.status),
+      response.status,
+    );
+  }
 
   const root = asRecord(await response.json());
   const choices = Array.isArray(root?.choices) ? root.choices : [];

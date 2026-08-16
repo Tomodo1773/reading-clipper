@@ -103,9 +103,10 @@ describe('ThreadAgent', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({}, 503));
     const stub = thread('D123:failure');
 
-    await expect(
-      runInDurableObject(stub, (instance) => (instance as unknown as ThreadAgent).handle(job({ jobId: 'EvFail' }))),
-    ).rejects.toThrow();
+    const outcome = await runInDurableObject(stub, (instance) =>
+      (instance as unknown as ThreadAgent).handle(job({ jobId: 'EvFail' })),
+    );
+    expect(outcome).toMatchObject({ ok: false, stage: 'chat', status: 503 });
 
     const recorded = mockModel(['やり直したわ。']);
     await runInDurableObject(stub, (instance) => (instance as unknown as ThreadAgent).handle(job({ jobId: 'EvFail' })));
