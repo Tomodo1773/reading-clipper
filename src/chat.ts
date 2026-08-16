@@ -47,11 +47,18 @@ interface ToolCall {
   id: string;
   type: 'function';
   function: { name: string; arguments: string };
+  /**
+   * Gemini 3系はfunction callに`google.thought_signature`を付けて返し、
+   * 次のリクエストでそのまま送り返すことを要求する。落とすと400になるため素通しする。
+   */
+  extra_content?: unknown;
 }
 
 export type ChatMessage =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
+  // `content`は省略可。Geminiはtool_callsだけの応答に`content`を持たないため、
+  // `content: null`を足して送り返すと形が変わってしまう。
+  | { role: 'assistant'; content?: string; tool_calls?: ToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 
 /** 1ターンで許すツール実行の往復回数。無限ループを止めるための上限。 */
@@ -72,6 +79,7 @@ function parseToolCalls(message: Record<string, unknown> | undefined): ToolCall[
       id,
       type: 'function',
       function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}) },
+      ...(record?.extra_content === undefined ? {} : { extra_content: record.extra_content }),
     });
   }
   return calls;
@@ -114,13 +122,13 @@ async function callModel(env: Env, messages: ChatMessage[]): Promise<ChatMessage
   if (!message) throw new ClipError('AI response contained no message', 'chat', true);
 
   const toolCalls = parseToolCalls(message);
-  const content = typeof message.content === 'string' ? message.content : null;
+  const content = typeof message.content === 'string' ? message.content : undefined;
   if (!content && toolCalls.length === 0) {
     throw new ClipError('AI response was neither text nor a tool call', 'chat', true);
   }
   return {
     role: 'assistant',
-    content,
+    ...(content === undefined ? {} : { content }),
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
   };
 }

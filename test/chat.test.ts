@@ -61,11 +61,16 @@ function mockWorld(modelReplies: Response[]): Recorded {
   return recorded;
 }
 
+/** Geminiはtool_callsだけの応答に`content`を持たず、function callにthought_signatureを添える。 */
 function toolCallReply(url: string): Response {
   return modelResponse({
-    content: null,
     tool_calls: [
-      { id: 'call_1', type: 'function', function: { name: 'save_clip', arguments: JSON.stringify({ url }) } },
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'save_clip', arguments: JSON.stringify({ url }) },
+        extra_content: { google: { thought_signature: 'sig-abc' } },
+      },
     ],
   });
 }
@@ -101,6 +106,13 @@ describe('chat turn', () => {
     expect(result.body).toContain('Queueで重い処理を分離する。');
 
     expect(turn.reply).toContain('要するに重い処理はQueueへ分けなさい');
+    // thought_signatureを落とすと次のリクエストが400になるため、そのまま送り返す。
+    const assistantCall = turn.appended[1] as { tool_calls?: Array<{ extra_content?: unknown }> };
+    expect(assistantCall.tool_calls?.[0]?.extra_content).toEqual({
+      google: { thought_signature: 'sig-abc' },
+    });
+    expect(assistantCall).not.toHaveProperty('content');
+
     // user / assistant(tool_calls) / tool / assistant(text)
     expect(turn.appended.map((message) => message.role)).toEqual([
       'user',
@@ -115,7 +127,6 @@ describe('chat turn', () => {
       { role: 'user', content: 'https://qiita.com/alice/items/abc' },
       {
         role: 'assistant',
-        content: null,
         tool_calls: [
           { id: 'call_1', type: 'function', function: { name: 'save_clip', arguments: '{"url":"https://qiita.com/alice/items/abc"}' } },
         ],
