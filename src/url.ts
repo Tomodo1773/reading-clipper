@@ -1,22 +1,6 @@
 import { ClipError } from './errors';
 import type { ClipSource } from './types';
 
-const TRAILING_PUNCTUATION = /[.,!?。、，．！？]+$/u;
-
-export function extractUrls(text: string): string[] {
-  const normalized = text.replace(
-    /<(https?:\/\/[^>|]+)(?:\|[^>]+)?>/giu,
-    (_match, url: string) => ` ${url} `,
-  );
-  const matches = normalized.match(/https?:\/\/[^\s<>]+/giu) ?? [];
-  const unique: string[] = [];
-  for (const match of matches) {
-    const candidate = match.replace(TRAILING_PUNCTUATION, '');
-    if (!unique.includes(candidate)) unique.push(candidate);
-  }
-  return unique;
-}
-
 export function canonicalizeUrl(rawUrl: string): URL {
   let url: URL;
   try {

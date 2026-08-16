@@ -1,7 +1,7 @@
 export type ProcessingStage =
   | 'validation'
   | 'fetch'
-  | 'summary'
+  | 'chat'
   | 'github'
   | 'slack';
 

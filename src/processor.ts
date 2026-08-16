@@ -1,104 +1,44 @@
 import { asClipError, ClipError } from './errors';
-import { fetchContent } from './fetchers';
-import { getGitHubFile, putGitHubFile } from './github';
-import { renderClipMarkdown } from './markdown';
 import { postSlackMessage } from './slack';
-import { formatPartialReply, formatSuccessReply, summarizeContent } from './summarizer';
-import type { ClipJob, Env } from './types';
-import { buildClipPath, canonicalizeUrl } from './url';
+import type { ChatJob, Env } from './types';
 
-export const MAX_QUEUE_RETRIES = 3;
+const MAX_QUEUE_RETRIES = 3;
 
-async function replyToJob(
-  job: ClipJob,
-  env: Env,
-  text: string,
-  kind: 'result' | 'failure',
-): Promise<void> {
-  await postSlackMessage({
-    token: env.SLACK_BOT_TOKEN,
-    channel: job.slackChannel,
-    threadTs: job.slackThreadTs,
-    text,
-    idempotencyKey: `${job.jobId}:${kind}`,
-  });
-}
-
-function validateJob(job: ClipJob): void {
+function validateJob(job: ChatJob): void {
   if (
-    job.version !== 1 ||
+    job?.version !== 2 ||
     !job.jobId ||
-    !job.url ||
+    typeof job.text !== 'string' ||
     !job.slackChannel ||
     !job.slackThreadTs ||
-    !job.receivedAt ||
-    !Number.isInteger(job.ignoredUrlCount) ||
-    job.ignoredUrlCount < 0
+    !job.receivedAt
   ) {
     throw new ClipError('Queue message was invalid', 'validation', false);
   }
 }
 
-export async function processClipJob(job: ClipJob, env: Env, attempts: number): Promise<void> {
-  validateJob(job);
-  const canonicalUrl = canonicalizeUrl(job.url).toString();
-  // 保存先は記事タイトルから決めるため、取得を先に行う。
-  const content = await fetchContent(canonicalUrl, env);
-  const path = buildClipPath(canonicalUrl, content.title);
-  // 既存ファイルの更新にはshaが要る。同じタイトルの記事は上書きする。
-  const existing = await getGitHubFile(env, path);
-
-  let summary: string | undefined;
-  try {
-    summary = await summarizeContent(content, env);
-  } catch (error) {
-    const summaryError = asClipError(error, 'summary');
-    if (summaryError.retryable && attempts <= MAX_QUEUE_RETRIES) throw summaryError;
-    console.warn(
-      JSON.stringify({ jobId: job.jobId, stage: 'summary', status: summaryError.status, partial: true }),
-    );
-  }
-
-  const markdown = renderClipMarkdown(content, job.receivedAt);
-  const saved = await putGitHubFile(env, path, markdown, existing?.sha);
-
-  await replyToJob(
-    job,
-    env,
-    summary
-      ? formatSuccessReply(summary, content.complete, saved.htmlUrl, job.ignoredUrlCount)
-      : formatPartialReply(saved.htmlUrl, job.ignoredUrlCount),
-    'result',
-  );
+/**
+ * 返事を書くモデルまで届かなかった場合だけ使う固定文。
+ * 保存の成否や記事の中身に触れる文はモデルが書く（ADR 0006）。
+ * 相手に取れる行動は「送り直す」しかないので、原因ごとに文を分けない。
+ */
+function failureReply(error: ClipError): string {
+  return error.stage === 'validation'
+    ? 'そのメッセージ、私の方で受け取り損ねたわ。もう一度送ってちょうだい。'
+    : '調子が悪くて言葉が出てこないわ。少し時間を置いて送り直してちょうだい。';
 }
 
-export function failureReply(error: ClipError): string {
-  switch (error.stage) {
-    case 'validation':
-      return 'そのURL、私には扱えないわ。HTTP(S)のURLを送り直してちょうだい。';
-    case 'fetch':
-      return '中身が取れなかったわ。取れていないものを保存も要約もするわけにはいかないから、今回は何も残していないわよ。';
-    case 'summary':
-      return '要約を作れなかったわ。本文もまだ保存していないから、少し時間を置いて送り直してちょうだい。';
-    case 'github':
-      return 'GitHubへの保存に失敗したわ。成功したことにはしないから、設定を確認して送り直してね。';
-    case 'slack':
-      return 'Slackへの返信に失敗したわ。処理自体は終わっているかもしれないから、GitHubの方も見ておいてちょうだい。';
-  }
-}
-
-export async function handleQueueMessage(
-  message: Message<ClipJob>,
-  env: Env,
-): Promise<void> {
+export async function handleQueueMessage(message: Message<ChatJob>, env: Env): Promise<void> {
+  const job = message.body;
   try {
-    await processClipJob(message.body, env, message.attempts);
+    validateJob(job);
+    await env.THREAD.get(env.THREAD.idFromName(`${job.slackChannel}:${job.slackThreadTs}`)).handle(job);
     message.ack();
   } catch (error) {
     const clipError = asClipError(error, 'validation');
     console.error(
       JSON.stringify({
-        jobId: message.body?.jobId,
+        jobId: job?.jobId,
         stage: clipError.stage,
         status: clipError.status,
         // 同じstageでも原因が複数あるため、どれで落ちたかをログから判別できるようにする。
@@ -108,14 +48,22 @@ export async function handleQueueMessage(
       }),
     );
 
-    if (!clipError.retryable || message.attempts > MAX_QUEUE_RETRIES) {
+    const giveUp = !clipError.retryable || message.attempts > MAX_QUEUE_RETRIES;
+    // 返信先が読めない壊れたメッセージでは通知そのものが投げるため、送り先がある場合だけ通知する。
+    if (giveUp && job?.slackChannel && job.slackThreadTs) {
       try {
-        await replyToJob(message.body, env, failureReply(clipError), 'failure');
+        await postSlackMessage({
+          token: env.SLACK_BOT_TOKEN,
+          channel: job.slackChannel,
+          threadTs: job.slackThreadTs,
+          text: failureReply(clipError),
+          idempotencyKey: `${job.jobId}:failure`,
+        });
       } catch (replyError) {
         const slackError = asClipError(replyError, 'slack');
         console.error(
           JSON.stringify({
-            jobId: message.body?.jobId,
+            jobId: job?.jobId,
             stage: slackError.stage,
             status: slackError.status,
             notificationFailed: true,

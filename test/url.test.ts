@@ -1,20 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildClipPath, canonicalizeUrl, classifyUrl, extractUrls } from '../src/url';
+import { buildClipPath, canonicalizeUrl, classifyUrl } from '../src/url';
 
 describe('URL handling', () => {
-  it('extracts Slack links and keeps only unique URLs', () => {
-    expect(
-      extractUrls('読む <https://example.com/a?x=1|Example> と https://example.com/a?x=1。'),
-    ).toEqual(['https://example.com/a?x=1']);
-  });
-
-  it('keeps URL path characters while removing sentence punctuation', () => {
-    expect(extractUrls('https://example.com/a(foo) https://example.com/a[ref].')).toEqual([
-      'https://example.com/a(foo)',
-      'https://example.com/a[ref]',
-    ]);
-  });
-
   it('canonicalizes known sources without tracking query strings', () => {
     const x = canonicalizeUrl('http://twitter.com/user/status/123?utm_source=x#part');
     expect(x.toString()).toBe('https://x.com/i/web/status/123');

@@ -1,0 +1,185 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type ChatMessage, runChatTurn } from '../src/chat';
+import { resetGitHubTokenCache } from '../src/github';
+import { base64ToUtf8 } from '../src/utils';
+import { generatePrivateKeyPem, jsonResponse, makeEnv, modelResponse } from './helpers';
+
+const RECEIVED_AT = '2026-08-15T00:00:00.000Z';
+const ARTICLE = '---\ntitle: Worker設計\nauthor: alice\n---\n## 概要\n\nQueueで重い処理を分離する。';
+
+let privateKeyPem: string;
+
+beforeEach(async () => {
+  resetGitHubTokenCache();
+  privateKeyPem = await generatePrivateKeyPem();
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+interface Recorded {
+  modelBodies: Record<string, unknown>[];
+  savedPath: string;
+  savedMarkdown: string;
+}
+
+/**
+ * `modelReplies` は chat completions が呼ばれた順に返す応答。
+ * 記事の取得とGitHubは実物のコードを通す。
+ */
+function mockWorld(modelReplies: Response[]): Recorded {
+  const recorded: Recorded = { modelBodies: [], savedPath: '', savedMarkdown: '' };
+  let modelCall = 0;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    if (url.includes('/app/installations/') && method === 'POST') {
+      return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+    }
+    if (url === 'https://qiita.com/alice/items/abc.md') {
+      return new Response(ARTICLE, { status: 200 });
+    }
+    if (url.includes('/compat/chat/completions')) {
+      recorded.modelBodies.push(JSON.parse(String(init?.body)));
+      const reply = modelReplies[modelCall];
+      modelCall += 1;
+      if (!reply) throw new Error(`unexpected model call #${modelCall}`);
+      return reply;
+    }
+    if (url.includes('/repos/example/clips/contents/') && method === 'GET') {
+      return jsonResponse({ message: 'Not Found' }, 404);
+    }
+    if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
+      recorded.savedPath = decodeURIComponent(url.split('/contents/')[1] ?? '');
+      recorded.savedMarkdown = base64ToUtf8(JSON.parse(String(init?.body)).content);
+      return jsonResponse(
+        { content: { sha: 'new-sha', html_url: 'https://github.com/example/clips/blob/main/clip.md' } },
+        201,
+      );
+    }
+    throw new Error(`unexpected request: ${method} ${url}`);
+  });
+  return recorded;
+}
+
+function toolCallReply(url: string): Response {
+  return modelResponse({
+    content: null,
+    tool_calls: [
+      { id: 'call_1', type: 'function', function: { name: 'save_clip', arguments: JSON.stringify({ url }) } },
+    ],
+  });
+}
+
+describe('chat turn', () => {
+  it('saves through the tool and answers from the body it returned', async () => {
+    const recorded = mockWorld([
+      toolCallReply('https://qiita.com/alice/items/abc'),
+      modelResponse({
+        content:
+          'Workerの非同期処理の話ね。要するに重い処理はQueueへ分けなさい、ってことよ。<https://github.com/example/clips/blob/main/clip.md|GitHub>には置いておいたわ。',
+      }),
+    ]);
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'https://qiita.com/alice/items/abc',
+      receivedAt: RECEIVED_AT,
+    });
+
+    // 保存はADR 0005のまま。要約はファイルに入れない。
+    expect(recorded.savedPath).toBe('clips/qiita.com/Worker設計.md');
+    expect(recorded.savedMarkdown).toContain('## 概要\n\nQueueで重い処理を分離する。');
+    expect(recorded.savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい');
+
+    // ツール結果には保存の事実と本文がそのまま入る。切り詰めない。
+    const toolMessage = turn.appended.find((message) => message.role === 'tool');
+    expect(toolMessage).toBeDefined();
+    const result = JSON.parse(String(toolMessage?.content));
+    expect(result.saved).toBe(true);
+    expect(result.github_url).toBe('https://github.com/example/clips/blob/main/clip.md');
+    expect(result.body).toContain('Queueで重い処理を分離する。');
+
+    expect(turn.reply).toContain('要するに重い処理はQueueへ分けなさい');
+    // user / assistant(tool_calls) / tool / assistant(text)
+    expect(turn.appended.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+    ]);
+  });
+
+  it('answers a follow-up from stored history without calling the tool again', async () => {
+    const history: ChatMessage[] = [
+      { role: 'user', content: 'https://qiita.com/alice/items/abc' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'save_clip', arguments: '{"url":"https://qiita.com/alice/items/abc"}' } },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: JSON.stringify({ saved: true, title: 'Worker設計', body: ARTICLE }),
+      },
+      { role: 'assistant', content: '要するに重い処理はQueueへ分けなさい、ってことよ。' },
+    ];
+    const recorded = mockWorld([modelResponse({ content: 'Queueで受け付けと処理を分ける話が中心よ。' })]);
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history,
+      userText: 'ここには何が書いてあるの？',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(turn.appended.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(turn.reply).toBe('Queueで受け付けと処理を分ける話が中心よ。');
+    // 記事の再取得もGitHubへの読み書きも起きない。
+    expect(recorded.savedPath).toBe('');
+    const sent = recorded.modelBodies[0]?.messages as ChatMessage[];
+    expect(sent).toHaveLength(history.length + 2);
+    expect(JSON.stringify(sent)).toContain('Queueで重い処理を分離する。');
+  });
+
+  it('reports a permanent fetch failure as tool data instead of saving', async () => {
+    let putCalled = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/compat/chat/completions')) {
+        const body = JSON.parse(String(init?.body));
+        const hasToolResult = body.messages.some(
+          (message: { role: string }) => message.role === 'tool',
+        );
+        return hasToolResult
+          ? modelResponse({ content: '中身が取れなかったわ。今回は何も残していないわよ。' })
+          : toolCallReply('https://qiita.com/alice/items/gone');
+      }
+      if (url === 'https://qiita.com/alice/items/gone.md') return jsonResponse({}, 404);
+      if (method === 'PUT') {
+        putCalled = true;
+        return jsonResponse({}, 201);
+      }
+      if (url.includes('/app/installations/')) {
+        return jsonResponse({ token: 't', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    });
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'https://qiita.com/alice/items/gone これ保存して',
+      receivedAt: RECEIVED_AT,
+    });
+
+    const toolMessage = turn.appended.find((message) => message.role === 'tool');
+    expect(JSON.parse(String(toolMessage?.content))).toEqual({ saved: false, failed_at: 'fetch' });
+    expect(putCalled).toBe(false);
+    expect(turn.reply).toContain('何も残していない');
+  });
+});

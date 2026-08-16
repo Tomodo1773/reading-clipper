@@ -14,6 +14,23 @@
     "enabled": true
   },
 
+  // スレッド1本ぶんの会話を、モデルへ渡す形のまま追記で持つ（ADR 0007）。
+  // 記事本文はツール結果の中に残るので、2ターン目以降は取得も読み直しもしない。
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "THREAD",
+        "class_name": "ThreadAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ThreadAgent"]
+    }
+  ],
+
   "queues": {
     "producers": [
       {

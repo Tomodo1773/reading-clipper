@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { handleQueueMessage } from './processor';
-import { postSlackMessage, verifySlackSignature } from './slack';
-import type { ClipJob, Env } from './types';
-import { extractUrls } from './url';
+import { verifySlackSignature } from './slack';
+import type { ChatJob, Env } from './types';
+
+export { ThreadAgent } from './thread';
 
 interface SlackEventEnvelope {
   type?: string;
@@ -73,32 +74,15 @@ app.post('/slack/events', async (c) => {
     return c.json({ ok: true });
   }
 
-  const urls = extractUrls(event.text!);
-  if (urls.length === 0) {
-    c.executionCtx.waitUntil(
-      postSlackMessage({
-        token: c.env.SLACK_BOT_TOKEN,
-        channel: event.channel!,
-        threadTs: event.ts!,
-        text: 'URLが見つからなかったよ。HTTP(S)のURLを1件送ってね。',
-        idempotencyKey: `${payload.event_id}:no-url`,
-      }).catch((error: unknown) => {
-        console.error(
-          JSON.stringify({ jobId: payload.event_id, stage: 'slack', noUrlReplyFailed: true }),
-        );
-      }),
-    );
-    return c.json({ ok: true });
-  }
-
-  const job: ClipJob = {
-    version: 1,
+  // URLの有無で分岐せず、届いた本文をそのままエージェントへ渡す（ADR 0006）。
+  const job: ChatJob = {
+    version: 2,
     jobId: payload.event_id!,
-    url: urls[0]!,
+    text: event.text!,
     slackChannel: event.channel!,
-    slackThreadTs: event.ts!,
+    // スレッド内の返信は親のtsに寄せる。会話状態のキーがぶれないようにするため。
+    slackThreadTs: event.thread_ts ?? event.ts!,
     receivedAt: new Date((payload.event_time ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
-    ignoredUrlCount: Math.max(0, urls.length - 1),
   };
   try {
     await c.env.CLIP_QUEUE.send(job);
@@ -110,7 +94,7 @@ app.post('/slack/events', async (c) => {
 
 export default {
   fetch: app.fetch,
-  async queue(batch: MessageBatch<ClipJob>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<ChatJob>, env: Env): Promise<void> {
     await Promise.all(batch.messages.map((message) => handleQueueMessage(message, env)));
   },
-} satisfies ExportedHandler<Env, ClipJob>;
+} satisfies ExportedHandler<Env, ChatJob>;

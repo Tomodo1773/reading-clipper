@@ -1,16 +1,20 @@
+import type { ThreadAgent } from './thread';
+
 export type ClipSource = 'qiita' | 'zenn' | 'x' | 'web';
 
-/** SlackからQueueへ渡す、1件ぶんのクリップ処理。 */
-export interface ClipJob {
-  version: 1;
-  /** Slack Events APIのevent_id。再送時の冪等キーとして使う。 */
+/**
+ * SlackからQueueへ渡す、1通ぶんの会話。
+ * URLの有無で分岐せず、届いたメッセージをそのまま渡す（ADR 0006）。
+ */
+export interface ChatJob {
+  version: 2;
+  /** Slack Events APIのevent_id。再送とQueue再試行の冪等キーとして使う。 */
   jobId: string;
-  url: string;
+  text: string;
   slackChannel: string;
+  /** 返信先スレッドの親ts。会話状態のキーでもある（ADR 0007）。 */
   slackThreadTs: string;
   receivedAt: string;
-  /** 1通に複数URLが含まれていた場合、処理しなかった件数。 */
-  ignoredUrlCount: number;
 }
 
 export interface FetchedContent {
@@ -26,7 +30,9 @@ export interface FetchedContent {
 /** Worker bindingsとsecrets。実値は公開リポジトリへ置かない。 */
 export interface Env {
   // wrangler.jsonc由来
-  CLIP_QUEUE: Queue<ClipJob>;
+  CLIP_QUEUE: Queue<ChatJob>;
+  /** スレッド単位の会話状態。`{channel}:{thread_ts}` で引く。 */
+  THREAD: DurableObjectNamespace<ThreadAgent>;
   AI_GATEWAY_ID: string;
   AI_MODEL: string;
 

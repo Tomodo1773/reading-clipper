@@ -1,8 +1,14 @@
-import type { ClipJob, Env } from '../src/types';
+import type { ThreadAgent } from '../src/thread';
+import type { ChatJob, Env } from '../src/types';
 
 export function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
-    CLIP_QUEUE: { send: async (_job: ClipJob) => undefined } as unknown as Queue<ClipJob>,
+    CLIP_QUEUE: { send: async (_job: ChatJob) => undefined } as unknown as Queue<ChatJob>,
+    THREAD: {
+      idFromName() {
+        throw new Error('THREAD was used without a stub in this test');
+      },
+    } as unknown as DurableObjectNamespace<ThreadAgent>,
     AI_GATEWAY_ID: 'reading-clipper-summarizer',
     AI_MODEL: 'gemini-3.7-flash',
     CLOUDFLARE_ACCOUNT_ID: 'test-account',
@@ -19,6 +25,20 @@ export function makeEnv(overrides: Partial<Env> = {}): Env {
     X_BEARER_TOKEN: 'x-test',
     ...overrides,
   };
+}
+
+export function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+/** OpenAI互換のchat completions応答。ツール呼び出しかテキストのどちらかを返す。 */
+export function modelResponse(
+  message: { content?: string | null; tool_calls?: unknown[] },
+): Response {
+  return jsonResponse({ choices: [{ message }] });
 }
 
 export async function generateGitHubAppKeyPair(): Promise<{

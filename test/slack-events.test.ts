@@ -2,7 +2,7 @@ import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { verifySlackSignature } from '../src/slack';
-import type { ClipJob } from '../src/types';
+import type { ChatJob } from '../src/types';
 import { makeEnv, signedSlackRequest } from './helpers';
 
 afterEach(() => vi.restoreAllMocks());
@@ -32,12 +32,12 @@ describe('Slack Events API', () => {
     ).toBe(false);
   });
 
-  it('queues only the first URL from a direct user message', async () => {
-    const sent: ClipJob[] = [];
+  it('queues the message text as it arrived, without looking for URLs', async () => {
+    const sent: ChatJob[] = [];
     const env = makeEnv({
       CLIP_QUEUE: {
-        send: async (job: ClipJob) => void sent.push(job),
-      } as unknown as Queue<ClipJob>,
+        send: async (job: ChatJob) => void sent.push(job),
+      } as unknown as Queue<ChatJob>,
     });
     const request = await signedSlackRequest({
       type: 'event_callback',
@@ -50,31 +50,30 @@ describe('Slack Events API', () => {
         user: 'U_ALLOWED',
         channel: 'D123',
         ts: '1700000000.000100',
-        text: '<https://example.com/one|one> https://example.com/two',
+        text: '<https://example.com/one|one> これどう思う？',
       },
     });
     const response = await worker.fetch(request, env, createExecutionContext());
     expect(response.status).toBe(200);
     expect(sent).toEqual([
-      expect.objectContaining({
-        version: 1,
+      {
+        version: 2,
         jobId: 'Ev123',
-        url: 'https://example.com/one',
+        text: '<https://example.com/one|one> これどう思う？',
         slackChannel: 'D123',
         slackThreadTs: '1700000000.000100',
-        ignoredUrlCount: 1,
-      }),
+        receivedAt: '2023-11-14T22:13:20.000Z',
+      },
     ]);
   });
 
-  it('replies asynchronously when no URL is present', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
-    const ctx = createExecutionContext();
+  it('queues a message without a URL as an ordinary conversation turn', async () => {
+    const sent: ChatJob[] = [];
+    const env = makeEnv({
+      CLIP_QUEUE: {
+        send: async (job: ChatJob) => void sent.push(job),
+      } as unknown as Queue<ChatJob>,
+    });
     const request = await signedSlackRequest({
       type: 'event_callback',
       event_id: 'EvNoUrl',
@@ -88,21 +87,44 @@ describe('Slack Events API', () => {
         text: 'あとで送る',
       },
     });
-    const response = await worker.fetch(request, makeEnv(), ctx);
-    await waitOnExecutionContext(ctx);
+    const response = await worker.fetch(request, env, createExecutionContext());
     expect(response.status).toBe(200);
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
-    expect(body.thread_ts).toBe('1700000000.000200');
-    expect(body.text).toContain('URLが見つからなかった');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toBe('あとで送る');
+  });
+
+  it('keys a threaded reply to the parent message, not to its own ts', async () => {
+    const sent: ChatJob[] = [];
+    const env = makeEnv({
+      CLIP_QUEUE: {
+        send: async (job: ChatJob) => void sent.push(job),
+      } as unknown as Queue<ChatJob>,
+    });
+    const request = await signedSlackRequest({
+      type: 'event_callback',
+      event_id: 'EvReply',
+      team_id: 'T_ALLOWED',
+      event: {
+        type: 'message',
+        channel_type: 'im',
+        user: 'U_ALLOWED',
+        channel: 'D123',
+        ts: '1700000900.000500',
+        thread_ts: '1700000000.000100',
+        text: 'ここには何が書いてあるの？',
+      },
+    });
+    const response = await worker.fetch(request, env, createExecutionContext());
+    expect(response.status).toBe(200);
+    expect(sent[0]?.slackThreadTs).toBe('1700000000.000100');
   });
 
   it('ignores a direct message from a user outside the allowlist', async () => {
-    const sent: ClipJob[] = [];
+    const sent: ChatJob[] = [];
     const env = makeEnv({
       CLIP_QUEUE: {
-        send: async (job: ClipJob) => void sent.push(job),
-      } as unknown as Queue<ClipJob>,
+        send: async (job: ChatJob) => void sent.push(job),
+      } as unknown as Queue<ChatJob>,
     });
     const request = await signedSlackRequest({
       type: 'event_callback',
@@ -124,11 +146,11 @@ describe('Slack Events API', () => {
   });
 
   it('ignores a direct message from another workspace', async () => {
-    const sent: ClipJob[] = [];
+    const sent: ChatJob[] = [];
     const env = makeEnv({
       CLIP_QUEUE: {
-        send: async (job: ClipJob) => void sent.push(job),
-      } as unknown as Queue<ClipJob>,
+        send: async (job: ChatJob) => void sent.push(job),
+      } as unknown as Queue<ChatJob>,
     });
     const request = await signedSlackRequest({
       type: 'event_callback',

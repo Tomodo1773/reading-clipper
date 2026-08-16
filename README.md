@@ -23,13 +23,19 @@ GitHubへ蓄積したMarkdownは、将来の検索、AIによる質問応答、�
 ```text
 Slack
   ↓
-受付Worker ──→ Cloudflare Queue ──→ 処理Worker
-  │                                  ├→ URL別の取得処理
-  └→ 3秒以内にHTTP応答               ├→ Markdown化・GitHub保存
-                                     └→ AI要約・Slack返信
+受付Worker ──→ Cloudflare Queue ──→ 処理Worker ──→ ThreadAgent (Durable Object)
+  │                                                  ├→ 会話履歴の復元と追記
+  └→ 3秒以内にHTTP応答                               ├→ AIとのやり取り
+                                                     │   └→ save_clipツール
+                                                     │       （URL別の取得 → Markdown化 → GitHub保存）
+                                                     └→ Slack返信
 ```
 
-受付WorkerはSlackの署名、ワークスペースID、ユーザーIDを検証し、許可されたユーザーの処理内容だけをCloudflare Queueへ登録して3秒以内にHTTP応答する。本文取得、AI要約、GitHub保存はQueueを受け取る処理Workerが行う。
+受付WorkerはSlackの署名、ワークスペースID、ユーザーIDを検証し、許可されたユーザーのメッセージだけをCloudflare Queueへ登録して3秒以内にHTTP応答する。
+
+届いたメッセージはURLの有無で分岐させず、すべてAIへ渡す。保存はAIが呼ぶ `save_clip` ツールとして実装し、取得・Markdown化・GitHub保存はそのツールの中で行う（[ADR 0006](docs/adr/0006-agent-with-save-tool.md)）。
+
+会話の状態はSlackのスレッド単位のDurable Object `ThreadAgent` が持つ。AIへ渡す形のまま、ツール呼び出しとその結果を含めて追記していく。記事本文はツール結果の中に残るため、同じスレッドで掘り下げて質問されても取得し直さない（[ADR 0007](docs/adr/0007-thread-history-in-durable-object.md)）。
 
 受付と処理は論理的に分離するが、デプロイ単位は1つのWorkerとし、`fetch` ハンドラーと `queue` ハンドラーを同居させる。個人開発の規模では、secretsとデプロイ経路を1系統に保てる利点が、デプロイ単位を分ける利点を上回るため。
 
@@ -53,7 +59,8 @@ Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管�
 
 | 対象 | 管理方法 |
 |---|---|
-| Workerコード、Queue bindings、Queue consumer設定、observability | Git管理された `wrangler.jsonc` とWrangler |
+| Workerコード、Queue bindings、Queue consumer設定、Durable Objects bindings、observability | Git管理された `wrangler.jsonc` とWrangler |
+| Durable Objectのクラスとストレージ | `wrangler.jsonc` の `migrations`（`new_sqlite_classes`）。作成コマンドは不要 |
 | Queue本体とdead letter queue | `wrangler queues create` で作成する |
 | AI Gateway | `scripts/setup-ai-gateway.ts`（Cloudflare APIを呼ぶ冪等スクリプト） |
 | runtime secrets | ローカルからWranglerで登録し、Gitには保存しない |
@@ -163,39 +170,44 @@ Zennには記事URL末尾に `.md` を付ける手段も、Markdown原稿を返�
 
 ## アプリの動作
 
-- Slack AppとのDM（メッセージタブ）へURLを送る。結果は元メッセージのスレッドへ返す。
-- 1通に複数URLがある場合は先頭だけを処理し、残りの件数を結果に表示する。
+- Slack AppとのDM（メッセージタブ）へメッセージを送る。返信は元メッセージのスレッドへ返す。
+- URLだけを送れば保存して要約が返る。文を添えれば会話になる。URLが含まれていても、感想を聞いているのか保存してほしいのかはAIが判断する。
+- スレッドに続けて質問すると、そのスレッドで保存した記事の内容を踏まえて答える。記事は取得し直さない。
+- スレッド内の返信は親メッセージに紐づく。別のメッセージから始めれば別の会話になる。
 - 保存先は `clips/{host}/{記事タイトル}.md` とする。ファイル名は記事タイトルだけから作り、URLハッシュは付けない。日本語はそのまま残し、Windowsで使えない文字・予約デバイス名・255バイトの上限だけを潰す。同一ホスト内でファイル名が衝突した場合は上書きする（[ADR 0005](docs/adr/0005-title-based-file-name-and-plain-body.md)）。
 - 保存するMarkdownは、フロントマターの直下に取得した本文をそのまま置く。見出しやセクションを足さず、AI要約も保存しない。要約はSlackへ返すためだけに使う。
-- 同じURLを新しく送ると再取得して同じファイルを更新する。Slack自身による同一イベントの再送も、取得と要約をやり直して上書きする。ただし汎用Web経路はFirecrawlの既定のキャッシュに任せるため、最大2日間は前回取得した内容が返りうる。速度と成功率を優先した意図的な挙動で、常に最新へ更新することは保証しない。
-- 本文取得に失敗した場合は保存も要約もしない。要約だけが失敗した場合は、その事実をSlackへ伝えて本文だけ保存する。
-- 一時的な失敗は指数バックオフ付きで3回再試行する。最終失敗をSlackへ通知した後、メッセージをdead letter queueへ送り、4日以内に原因を直してURLを再送する。
+- 同じURLを新しく送ると再取得して同じファイルを更新する。ただし汎用Web経路はFirecrawlの既定のキャッシュに任せるため、最大2日間は前回取得した内容が返りうる。速度と成功率を優先した意図的な挙動で、常に最新へ更新することは保証しない。
+- 本文取得に失敗した場合は保存しない。失敗したという事実をツールの結果としてAIへ返し、AIがその旨を返信する。
+- Slack自身による同一イベントの再送と、Queueの再試行は、`ThreadAgent` が処理済み `event_id` を記録して二重に会話を進めないようにする。Slackへの投稿だけが失敗した再試行は、保存済みの返信を送り直す。
+- 一時的な失敗は指数バックオフ付きで3回再試行する。最終失敗をSlackへ通知した後、メッセージをdead letter queueへ送り、4日以内に原因を直して送り直す。
 
-## Slackへ返す要約
+## Slackへ返す文章
 
-要約は1〜2文（60〜120字程度）の簡潔な一言とし、見出しやセクション分けをせず、Slackのチャットに収まる自然な文章にする。口調は面倒見のいい年上のお姉さんのタメ口に統一し、アプリ側が足す固定文も同じ口調にする（[ADR 0004](docs/adr/0004-concise-summary.md)）。
+保存直後の要約は1〜2文（60〜120字程度）の簡潔な一言とし、見出しやセクション分けをせず、Slackのチャットに収まる自然な文章にする。掘り下げの質問に答えるときは長さの縛りを外す。口調は面倒見のいい年上のお姉さんのタメ口に統一する（[ADR 0004](docs/adr/0004-concise-summary.md)）。
 
-初期版ではGemini 3.7 Flashを使う。モデル名は `AI_MODEL` bindingで差し替え可能にする。Cloudflare AI GatewayのOpenAI互換エンドポイントを使い、将来OpenAIへ移行できるようプロバイダ固有SDKに依存しない。
+要約・保存結果・掘り下げの回答は、すべてAIが1つの文章として書く。アプリ側で固定文を足したりリンクを組み立てたりはしない。取得の不完全性（`fetch_complete`）と保存の成否（`saved`）はツールの結果に事実として入れ、それをどう伝えるかはAIに任せる（[ADR 0006](docs/adr/0006-agent-with-save-tool.md)）。
 
-GeminiはCloudflare AI Gateway経由で呼び出し、AI Gatewayでプロンプトと応答本文を含むログを保存して、要約の入力と出力を追跡できるようにする。OpenTelemetryの送信先は将来必要になった時点で決める。
+初期版ではGemini 3.7 Flashを使う。モデル名は `AI_MODEL` bindingで差し替え可能にする。Cloudflare AI GatewayのOpenAI互換エンドポイントを使い、将来OpenAIへ移行できるようプロバイダ固有SDKに依存しない。ツール呼び出しもOpenAI互換の `tools` / `tool_calls` で行う。
 
-少なくとも次を伝える。
+GeminiはCloudflare AI Gateway経由で呼び出し、AI Gatewayでプロンプトと応答本文を含むログを保存して、入力と出力を追跡できるようにする。OpenTelemetryの送信先は将来必要になった時点で決める。
+
+保存直後の返信では、少なくとも次を伝える。
 
 - 何について書かれたものか
 - 主な結論
 - 取得が不完全な場合は、その事実
 - GitHubへの保存成否
 
-Geminiには、その記事固有の「何についての記事か」と「要するにどういうことか」だけを、文の数を決めずに返させる。取得の不完全性とGitHub保存結果はアプリ側で文を足して伝える。実際の記事を使った確認はAPIキーを用意した後に行い、必要なら `AI_MODEL` またはプロンプトを調整する。
-
 ## 初期バージョンに含めないもの
 
 - 未読・既読状態の管理
 - 未読記事の定期通知と推薦
-- 保存済み記事の検索・質問応答
+- 保存済み記事の横断検索（同じスレッド内での質問応答は含む）
+- Web検索
+- GitHub上のクリップの整理（リネーム、削除）
 - 興味傾向の分析
 
-これらは将来候補として残すが、初期バージョンの保存処理とは分けて設計する。
+これらは将来候補として残すが、初期バージョンとは分けて設計する。GitHubを書き換えるツールをAIへ渡すときは、記事本文という第三者の書いた入力がAIの文脈に入っていることを前提に、実行前にSlackで確認を取る導線を必ず設ける。
 
 ## 未読・既読管理は別途設計する
 
@@ -214,6 +226,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - Slackへ、記事のテーマと主な結論が分かる1〜2文の要約が返る。
 - Slackの返信から、保存に成功したか失敗したかを判別できる。
 - 取得できなかった内容を、取得できたものとして保存・要約しない。
+- 同じスレッドで続けて質問すると、保存した記事の内容を踏まえた回答が返り、記事の再取得が起きない。
 
 ## 設計判断の記録
 
@@ -224,6 +237,8 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [ADR 0003: Zennの記事はZennの非公式APIから取得してMarkdownへ変換する](docs/adr/0003-zenn-unofficial-api.md)
 - [ADR 0004: Slackへ返す要約は1〜2文の簡潔な一言にする](docs/adr/0004-concise-summary.md)
 - [ADR 0005: 保存Markdownは記事タイトルのファイル名にし、フロントマターの直下を本文そのままにする](docs/adr/0005-title-based-file-name-and-plain-body.md)
+- [ADR 0006: Slackの入力をすべてAIへ渡し、保存をツールにする](docs/adr/0006-agent-with-save-tool.md)
+- [ADR 0007: スレッドの会話履歴をDurable Objectにツール結果ごと持つ](docs/adr/0007-thread-history-in-durable-object.md)
 
 ## 確認済みの外部仕様
 
