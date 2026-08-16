@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleQueueMessage } from '../src/processor';
-import type { ThreadAgent, TurnOutcome } from '../src/thread';
+import type { ThreadAgent } from '../src/thread';
 import type { ChatJob } from '../src/types';
-import { jsonResponse, makeEnv } from './helpers';
+import { jsonResponse, makeEnv, modelResponse } from './helpers';
 
 const job: ChatJob = {
   version: 2,
@@ -15,33 +15,55 @@ const job: ChatJob = {
 
 afterEach(() => vi.restoreAllMocks());
 
-function threadStub(handle: () => Promise<TurnOutcome>): DurableObjectNamespace<ThreadAgent> {
-  return {
-    idFromName: () => 'thread-id',
-    get: () => ({ handle }),
-  } as unknown as DurableObjectNamespace<ThreadAgent>;
+interface Stub {
+  namespace: DurableObjectNamespace<ThreadAgent>;
+  names: string[];
+  saved: { appended: string[]; reply: string }[];
 }
 
-/** DOはRPC境界で例外の型を保てないため、失敗を値で返す。 */
-const gatewayFailure: TurnOutcome = {
-  ok: false,
-  stage: 'chat',
-  retryable: true,
-  status: 503,
-  message: 'gateway is unhappy',
-};
+/** 会話の置き場だけを差し替える。モデルの呼び出しはprocessor側で走る。 */
+function threadStub(stored: { history?: string[]; reply?: string } = {}): Stub {
+  const stub: Stub = {
+    names: [],
+    saved: [],
+    namespace: undefined as unknown as DurableObjectNamespace<ThreadAgent>,
+  };
+  stub.namespace = {
+    idFromName: (name: string) => {
+      stub.names.push(name);
+      return 'thread-id';
+    },
+    get: () => ({
+      load: async () => ({ history: stored.history ?? [], reply: stored.reply }),
+      save: async (_eventId: string, appended: string[], reply: string) => {
+        stub.saved.push({ appended, reply });
+      },
+    }),
+  } as unknown as DurableObjectNamespace<ThreadAgent>;
+  return stub;
+}
+
+function queueMessage(overrides: Partial<{ body: ChatJob; attempts: number }> = {}) {
+  const ack = vi.fn();
+  const retry = vi.fn();
+  return {
+    ack,
+    retry,
+    message: {
+      body: overrides.body ?? job,
+      attempts: overrides.attempts ?? 1,
+      ack,
+      retry,
+    } as unknown as Message<ChatJob>,
+  };
+}
 
 describe('queue handler', () => {
   it('acks a permanently invalid message after notifying Slack', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ ok: true }));
-    const ack = vi.fn();
-    const retry = vi.fn();
-    const message = {
-      body: { ...job, version: 1 },
-      attempts: 1,
-      ack,
-      retry,
-    } as unknown as Message<ChatJob>;
+    const { ack, retry, message } = queueMessage({
+      body: { ...job, version: 1 } as unknown as ChatJob,
+    });
 
     await handleQueueMessage(message, makeEnv());
 
@@ -50,23 +72,50 @@ describe('queue handler', () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
-  it('hands a valid message to the thread keyed by channel and thread_ts', async () => {
-    const handle = vi.fn(async (): Promise<TurnOutcome> => ({ ok: true }));
-    const seen: string[] = [];
-    const namespace = {
-      idFromName: (name: string) => {
-        seen.push(name);
-        return 'thread-id';
-      },
-      get: () => ({ handle }),
-    } as unknown as DurableObjectNamespace<ThreadAgent>;
-    const ack = vi.fn();
-    const message = { body: job, attempts: 1, ack, retry: vi.fn() } as unknown as Message<ChatJob>;
+  it('runs the turn against the thread keyed by channel and thread_ts', async () => {
+    const slackTexts: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes(':generateContent')) {
+        return modelResponse([{ text: 'こんばんは。今日は何を読むの？' }]);
+      }
+      if (url === 'https://slack.com/api/chat.postMessage') {
+        slackTexts.push(JSON.parse(String(init?.body)).text);
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const thread = threadStub();
+    const { ack, message } = queueMessage();
 
-    await handleQueueMessage(message, makeEnv({ THREAD: namespace }));
+    await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
 
-    expect(seen).toEqual(['D123:1700000000.000100']);
-    expect(handle).toHaveBeenCalledWith(job);
+    expect(thread.names).toEqual(['D123:1700000000.000100']);
+    expect(slackTexts).toEqual(['こんばんは。今日は何を読むの？']);
+    // user と assistant の2件が、JSONのまま会話へ積まれる。
+    expect(thread.saved).toHaveLength(1);
+    expect(
+      (thread.saved[0]?.appended ?? []).map((message) => JSON.parse(message).role),
+    ).toEqual(['user', 'assistant']);
+    expect(ack).toHaveBeenCalledOnce();
+  });
+
+  it('reposts the stored reply for a redelivered event without calling the model', async () => {
+    const slackTexts: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input) !== 'https://slack.com/api/chat.postMessage') {
+        throw new Error(`unexpected request: ${String(input)}`);
+      }
+      slackTexts.push(JSON.parse(String(init?.body)).text);
+      return jsonResponse({ ok: true });
+    });
+    const thread = threadStub({ reply: '一度だけ答えるわ。' });
+    const { ack, message } = queueMessage();
+
+    await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
+
+    expect(slackTexts).toEqual(['一度だけ答えるわ。']);
+    expect(thread.saved).toEqual([]);
     expect(ack).toHaveBeenCalledOnce();
   });
 
@@ -77,29 +126,34 @@ describe('queue handler', () => {
         slackNotified = true;
         return jsonResponse({ ok: true });
       }
-      throw new Error(`unexpected request: ${String(input)}`);
+      return jsonResponse({ error: { message: 'gateway is unhappy' } }, 503);
     });
-    const namespace = threadStub(async () => gatewayFailure);
-    const ack = vi.fn();
-    const retry = vi.fn();
-    const message = { body: job, attempts: 4, ack, retry } as unknown as Message<ChatJob>;
+    const thread = threadStub();
+    const { ack, retry, message } = queueMessage({ attempts: 4 });
 
-    await handleQueueMessage(message, makeEnv({ THREAD: namespace }));
+    await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
 
     expect(slackNotified).toBe(true);
+    expect(thread.saved).toEqual([]);
     expect(ack).not.toHaveBeenCalled();
     expect(retry).toHaveBeenCalledOnce();
   });
 
   it('keeps retrying quietly while attempts remain', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ ok: true }));
-    const namespace = threadStub(async () => gatewayFailure);
-    const retry = vi.fn();
-    const message = { body: job, attempts: 1, ack: vi.fn(), retry } as unknown as Message<ChatJob>;
+    let slackNotified = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === 'https://slack.com/api/chat.postMessage') {
+        slackNotified = true;
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({ error: { message: 'gateway is unhappy' } }, 503);
+    });
+    const thread = threadStub();
+    const { retry, message } = queueMessage();
 
-    await handleQueueMessage(message, makeEnv({ THREAD: namespace }));
+    await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
 
     expect(retry).toHaveBeenCalledOnce();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(slackNotified).toBe(false);
   });
 });

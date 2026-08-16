@@ -34,11 +34,12 @@ export function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
-/** OpenAI互換のchat completions応答。ツール呼び出しかテキストのどちらかを返す。 */
-export function modelResponse(
-  message: { content?: string | null; tool_calls?: unknown[] },
-): Response {
-  return jsonResponse({ choices: [{ message }] });
+/** GeminiのgenerateContent応答。partsにテキストかfunctionCallを並べる。 */
+export function modelResponse(parts: unknown[]): Response {
+  return jsonResponse({
+    candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }],
+    usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+  });
 }
 
 export async function generateGitHubAppKeyPair(): Promise<{

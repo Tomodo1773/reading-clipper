@@ -44,6 +44,9 @@
         // 1URLごとに取得・要約・GitHub保存が独立して失敗しうるため、
         // バッチにまとめず1件ずつ処理する。
         "max_batch_size": 1,
+        // 会話は履歴を読んでから書くまでの間に別のメッセージが割り込むと壊れる。
+        // 消費を1件ずつに直列化して、その交錯を起こさせない（ADR 0008）。
+        "max_concurrency": 1,
         "max_retries": 3,
         "dead_letter_queue": "reading-clipper-clips-dlq"
       }

@@ -23,12 +23,13 @@ GitHubへ蓄積したMarkdownは、将来の検索、AIによる質問応答、�
 ```text
 Slack
   ↓
-受付Worker ──→ Cloudflare Queue ──→ 処理Worker ──→ ThreadAgent (Durable Object)
-  │                                                  ├→ 会話履歴の復元と追記
-  └→ 3秒以内にHTTP応答                               ├→ AIとのやり取り
-                                                     │   └→ save_clipツール
-                                                     │       （URL別の取得 → Markdown化 → GitHub保存）
-                                                     └→ Slack返信
+受付Worker ──→ Cloudflare Queue ──→ 処理Worker
+  │                                   ├→ ThreadAgent (Durable Object) から会話履歴を読む
+  └→ 3秒以内にHTTP応答                ├→ AIとのやり取り
+                                      │   └→ save_clipツール
+                                      │       （URL別の取得 → Markdown化 → GitHub保存）
+                                      ├→ ThreadAgent へ1ターンぶんを追記
+                                      └→ Slack返信
 ```
 
 受付WorkerはSlackの署名、ワークスペースID、ユーザーIDを検証し、許可されたユーザーのメッセージだけをCloudflare Queueへ登録して3秒以内にHTTP応答する。
@@ -36,6 +37,8 @@ Slack
 届いたメッセージはURLの有無で分岐させず、すべてAIへ渡す。保存はAIが呼ぶ `save_clip` ツールとして実装し、取得・Markdown化・GitHub保存はそのツールの中で行う（[ADR 0006](docs/adr/0006-agent-with-save-tool.md)）。
 
 会話の状態はSlackのスレッド単位のDurable Object `ThreadAgent` が持つ。AIへ渡す形のまま、ツール呼び出しとその結果を含めて追記していく。記事本文はツール結果の中に残るため、同じスレッドで掘り下げて質問されても取得し直さない（[ADR 0007](docs/adr/0007-thread-history-in-durable-object.md)）。
+
+AIとのやり取りは処理Worker側で行い、`ThreadAgent` は会話の読み書きだけを持つ。同じスレッドへ立て続けに届いた2通が並走しないよう、Queue consumerは `max_concurrency: 1` で消費する（[ADR 0008](docs/adr/0008-ai-sdk-and-model-calls-outside-the-durable-object.md)）。
 
 受付と処理は論理的に分離するが、デプロイ単位は1つのWorkerとし、`fetch` ハンドラーと `queue` ハンドラーを同居させる。個人開発の規模では、secretsとデプロイ経路を1系統に保てる利点が、デプロイ単位を分ける利点を上回るため。
 
@@ -179,7 +182,8 @@ Zennには記事URL末尾に `.md` を付ける手段も、Markdown原稿を返�
 - 同じURLを新しく送ると再取得して同じファイルを更新する。ただし汎用Web経路はFirecrawlの既定のキャッシュに任せるため、最大2日間は前回取得した内容が返りうる。速度と成功率を優先した意図的な挙動で、常に最新へ更新することは保証しない。
 - 本文取得に失敗した場合は保存しない。失敗したという事実をツールの結果としてAIへ返し、AIがその旨を返信する。
 - Slack自身による同一イベントの再送と、Queueの再試行は、`ThreadAgent` が処理済み `event_id` を記録して二重に会話を進めないようにする。Slackへの投稿だけが失敗した再試行は、保存済みの返信を送り直す。
-- 一時的な失敗は指数バックオフ付きで3回再試行する。最終失敗をSlackへ通知した後、メッセージをdead letter queueへ送り、4日以内に原因を直して送り直す。
+- モデルの呼び出しとSlackへの投稿が一時的に失敗した場合は、指数バックオフ付きで3回再試行する。最終失敗をSlackへ通知した後、メッセージをdead letter queueへ送り、4日以内に原因を直して送り直す。
+- 記事の取得やGitHubへの保存が失敗した場合は、再試行せずその事実をツールの結果としてAIへ返す。取り直すかどうかはユーザーが決める（[ADR 0008](docs/adr/0008-ai-sdk-and-model-calls-outside-the-durable-object.md)）。
 
 ## Slackへ返す文章
 
@@ -187,9 +191,9 @@ Zennには記事URL末尾に `.md` を付ける手段も、Markdown原稿を返�
 
 要約・保存結果・掘り下げの回答は、すべてAIが1つの文章として書く。アプリ側で固定文を足したりリンクを組み立てたりはしない。取得の不完全性（`fetch_complete`）と保存の成否（`saved`）はツールの結果に事実として入れ、それをどう伝えるかはAIに任せる（[ADR 0006](docs/adr/0006-agent-with-save-tool.md)）。
 
-初期版ではGemini 3.7 Flashを使う。モデル名は `AI_MODEL` bindingで差し替え可能にする。Cloudflare AI GatewayのOpenAI互換エンドポイントを使い、将来OpenAIへ移行できるようプロバイダ固有SDKに依存しない。ツール呼び出しもOpenAI互換の `tools` / `tool_calls` で行う。
+初期版ではGemini 3.7 Flashを使う。モデル名は `AI_MODEL` bindingで差し替え可能にする。モデルの呼び出しとツールの往復にはVercel AI SDK（`ai` と `@ai-sdk/google`）を使い、応答のパースやツールループを自作しない。GeminiはネイティブAPI形式で呼ぶ。プロバイダを移るときは `@ai-sdk/*` のプロバイダを差し替える（[ADR 0008](docs/adr/0008-ai-sdk-and-model-calls-outside-the-durable-object.md)）。
 
-GeminiはCloudflare AI Gateway経由で呼び出し、AI Gatewayでプロンプトと応答本文を含むログを保存して、入力と出力を追跡できるようにする。OpenTelemetryの送信先は将来必要になった時点で決める。
+GeminiはCloudflare AI GatewayのGoogle AI Studioパススルー経由で呼び出し、AI Gatewayでプロンプトと応答本文を含むログを保存して、入力と出力を追跡できるようにする。OpenTelemetryの送信先は将来必要になった時点で決める。
 
 保存直後の返信では、少なくとも次を伝える。
 
@@ -239,6 +243,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [ADR 0005: 保存Markdownは記事タイトルのファイル名にし、フロントマターの直下を本文そのままにする](docs/adr/0005-title-based-file-name-and-plain-body.md)
 - [ADR 0006: Slackの入力をすべてAIへ渡し、保存をツールにする](docs/adr/0006-agent-with-save-tool.md)
 - [ADR 0007: スレッドの会話履歴をDurable Objectにツール結果ごと持つ](docs/adr/0007-thread-history-in-durable-object.md)
+- [ADR 0008: AI SDKに乗せ、モデルの呼び出しをDurable Objectの外へ出す](docs/adr/0008-ai-sdk-and-model-calls-outside-the-durable-object.md)
 
 ## 確認済みの外部仕様
 
@@ -255,6 +260,9 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/) — Worker bindingsのsource of truth
 - [Cloudflare Workers Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
 - [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/usage/rest-api/)
+- [AI GatewayのGoogle AI Studioプロバイダ](https://developers.cloudflare.com/ai-gateway/usage/providers/google-ai-studio/) — Stored Keys（BYOK）なら `cf-aig-authorization` だけで認証が通り、Gemini APIキーをリクエストに載せる必要がない
+- [Gemini Thought Signatures](https://ai.google.dev/gemini-api/docs/thought-signatures) — 受け取った署名をそのまま次のリクエストへ返す必要がある。公式SDKを使わず履歴を組み立てる場合は自分で扱う
+- [AI SDK Tool Calling](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling) — `stopWhen` でツール実行の往復を回し、`responseMessages` を会話へ追記する
 - [Cloudflare AI Gateway Logging](https://developers.cloudflare.com/ai-gateway/observability/logging/) — プロンプトと応答本文の保存は既定で有効
 - [Cloudflare AI Gateway Authentication](https://developers.cloudflare.com/ai-gateway/configuration/authentication/) — トークンは `AI Gateway Run` 権限のAPI tokenで、表示は一度きり
 - [Cloudflare AI Gateway BYOK](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/) — シークレット名は `{gateway_id}_{provider_slug}_{alias}` 形式

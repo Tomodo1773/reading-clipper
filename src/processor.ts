@@ -1,3 +1,5 @@
+import type { ModelMessage } from 'ai';
+import { runChatTurn } from './chat';
 import { asClipError, ClipError } from './errors';
 import { postSlackMessage } from './slack';
 import type { ChatJob, Env } from './types';
@@ -32,12 +34,32 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
   const job = message.body;
   try {
     validateJob(job);
-    const outcome = await env.THREAD
-      .get(env.THREAD.idFromName(`${job.slackChannel}:${job.slackThreadTs}`))
-      .handle(job);
-    if (!outcome.ok) {
-      throw new ClipError(outcome.message, outcome.stage, outcome.retryable, outcome.status);
+    const thread = env.THREAD.get(
+      env.THREAD.idFromName(`${job.slackChannel}:${job.slackThreadTs}`),
+    );
+    const stored = await thread.load(job.jobId);
+    let reply = stored.reply;
+    if (reply === undefined) {
+      const turn = await runChatTurn({
+        env,
+        history: stored.history.map((message) => JSON.parse(message) as ModelMessage),
+        userText: job.text,
+        receivedAt: job.receivedAt,
+      });
+      await thread.save(
+        job.jobId,
+        turn.appended.map((message) => JSON.stringify(message)),
+        turn.reply,
+      );
+      reply = turn.reply;
     }
+    await postSlackMessage({
+      token: env.SLACK_BOT_TOKEN,
+      channel: job.slackChannel,
+      threadTs: job.slackThreadTs,
+      text: reply,
+      idempotencyKey: `${job.jobId}:reply`,
+    });
     message.ack();
   } catch (error) {
     const clipError = asClipError(error, 'validation');
