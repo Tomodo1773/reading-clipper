@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
+import { asClipError } from './errors';
 import { handleQueueMessage } from './processor';
-import { verifySlackSignature } from './slack';
+import { addSlackReaction, verifySlackSignature } from './slack';
 import type { ChatJob, Env } from './types';
 
 export { ThreadAgent } from './thread';
@@ -23,6 +24,9 @@ interface SlackEventEnvelope {
     thread_ts?: string;
   };
 }
+
+/** 受け取った印としてメッセージへ付ける絵文字。完了時に外さない。 */
+const RECEIVED_REACTION = 'eyes';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -73,6 +77,29 @@ app.post('/slack/events', async (c) => {
   ) {
     return c.json({ ok: true });
   }
+
+  // 受け取った印をすぐ返す。consumerは max_concurrency:1 で前のジョブを待つため、
+  // ここで付けないと「即座」にならない。3秒ACKを守るためawaitしない。
+  c.executionCtx.waitUntil(
+    addSlackReaction({
+      token: c.env.SLACK_BOT_TOKEN,
+      channel: event.channel!,
+      // 会話状態のキー（thread_ts）ではなく、届いたメッセージ自身のtsに付ける。
+      timestamp: event.ts!,
+      name: RECEIVED_REACTION,
+    }).catch((error: unknown) => {
+      const clipError = asClipError(error, 'slack');
+      console.warn(
+        JSON.stringify({
+          jobId: payload.event_id,
+          stage: clipError.stage,
+          status: clipError.status,
+          message: clipError.message,
+          reactionFailed: true,
+        }),
+      );
+    }),
+  );
 
   // URLの有無で分岐せず、届いた本文をそのままエージェントへ渡す（ADR 0006）。
   const job: ChatJob = {

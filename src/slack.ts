@@ -1,5 +1,5 @@
 import { ClipError, isRetryableStatus } from './errors';
-import { fetchWithTimeout, sha256Bytes } from './utils';
+import { asRecord, fetchWithTimeout, sha256Bytes, stringField } from './utils';
 
 export async function verifySlackSignature(
   body: string,
@@ -40,29 +40,22 @@ async function deterministicUuid(seed: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export async function postSlackMessage(options: {
-  token: string;
-  channel: string;
-  threadTs: string;
-  text: string;
-  idempotencyKey: string;
-}): Promise<void> {
+/** okErrorsに挙げたSlack APIエラーは失敗として扱わない。 */
+async function callSlackApi(
+  method: string,
+  token: string,
+  body: Record<string, unknown>,
+  okErrors: readonly string[] = [],
+): Promise<void> {
   const response = await fetchWithTimeout(
-    'https://slack.com/api/chat.postMessage',
+    `https://slack.com/api/${method}`,
     {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${options.token}`,
+        authorization: `Bearer ${token}`,
         'content-type': 'application/json; charset=utf-8',
       },
-      body: JSON.stringify({
-        channel: options.channel,
-        thread_ts: options.threadTs,
-        text: options.text,
-        client_msg_id: await deterministicUuid(options.idempotencyKey),
-        unfurl_links: false,
-        unfurl_media: false,
-      }),
+      body: JSON.stringify(body),
     },
     10_000,
     'slack',
@@ -74,17 +67,51 @@ export async function postSlackMessage(options: {
   } catch {
     payload = undefined;
   }
-  const ok = typeof payload === 'object' && payload !== null && (payload as { ok?: unknown }).ok === true;
-  if (!response.ok || !ok) {
-    const apiError =
-      typeof payload === 'object' && payload !== null && typeof (payload as { error?: unknown }).error === 'string'
-        ? (payload as { error: string }).error
-        : `HTTP ${response.status}`;
-    throw new ClipError(
-      `Slack reply failed: ${apiError}`,
-      'slack',
-      response.status === 200 || isRetryableStatus(response.status),
-      response.status,
-    );
-  }
+  const record = asRecord(payload);
+  if (response.ok && record?.ok === true) return;
+
+  const apiError = stringField(record, 'error') ?? `HTTP ${response.status}`;
+  if (okErrors.includes(apiError)) return;
+  throw new ClipError(
+    `Slack ${method} failed: ${apiError}`,
+    'slack',
+    response.status === 200 || isRetryableStatus(response.status),
+    response.status,
+  );
+}
+
+export async function postSlackMessage(options: {
+  token: string;
+  channel: string;
+  threadTs: string;
+  text: string;
+  idempotencyKey: string;
+}): Promise<void> {
+  await callSlackApi('chat.postMessage', options.token, {
+    channel: options.channel,
+    thread_ts: options.threadTs,
+    text: options.text,
+    client_msg_id: await deterministicUuid(options.idempotencyKey),
+    unfurl_links: false,
+    unfurl_media: false,
+  });
+}
+
+/** Slackのイベント再送で同じ絵文字を2度付けにいくため、already_reactedは成功として扱う。 */
+export async function addSlackReaction(options: {
+  token: string;
+  channel: string;
+  timestamp: string;
+  name: string;
+}): Promise<void> {
+  await callSlackApi(
+    'reactions.add',
+    options.token,
+    {
+      channel: options.channel,
+      timestamp: options.timestamp,
+      name: options.name,
+    },
+    ['already_reacted'],
+  );
 }

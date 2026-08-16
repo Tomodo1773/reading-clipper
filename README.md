@@ -24,7 +24,7 @@ GitHubへ蓄積したMarkdownは、将来の検索、AIによる質問応答、�
 Slack
   ↓
 受付Worker ──→ Cloudflare Queue ──→ 処理Worker
-  │                                   ├→ ThreadAgent (Durable Object) から会話履歴を読む
+  ├→ 受け取った印に 👀                ├→ ThreadAgent (Durable Object) から会話履歴を読む
   └→ 3秒以内にHTTP応答                ├→ AIとのやり取り
                                       │   └→ save_clipツール
                                       │       （URL別の取得 → Markdown化 → GitHub保存）
@@ -127,7 +127,7 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 6. Gemini APIキーを用意する。**完了**
 7. Slack App/Botを作成し、URLを受け付ける設定を用意する。**完了**
    1. App HomeのMessages Tabを有効化し、ユーザーからのメッセージ送信を許可する。**完了**
-   2. Bot Token Scopesに `chat:write` と `im:history` を追加する。**完了**
+   2. Bot Token Scopesに `chat:write` と `im:history` を追加する。**完了**／`reactions:write` の追加は**未完了**。追加後はSlack Appの再インストールが必要で、それまで 👀 は付かない（本処理は続く）。
    3. Socket Modeを無効にする。**完了**
    4. Event SubscriptionsのRequest URLを `https://<Workerの公開ホスト>/slack/events` にし、Bot Event `message.im` を購読する。**完了**
    5. Signing SecretとBot User OAuth Tokenを、それぞれ `SLACK_SIGNING_SECRET` と `SLACK_BOT_TOKEN` としてWorkerへ登録する。**完了**
@@ -174,6 +174,7 @@ Zennには記事URL末尾に `.md` を付ける手段も、Markdown原稿を返�
 ## アプリの動作
 
 - Slack AppとのDM（メッセージタブ）へメッセージを送る。返信は元メッセージのスレッドへ返す。
+- メッセージを送ると、処理を始める前にそのメッセージへ 👀 が付く。受け取った印なので、返信が来ても外れない。
 - URLだけを送れば保存して要約が返る。文を添えれば会話になる。URLが含まれていても、感想を聞いているのか保存してほしいのかはAIが判断する。
 - スレッドに続けて質問すると、そのスレッドで保存した記事の内容を踏まえて答える。記事は取得し直さない。
 - スレッド内の返信は親メッセージに紐づく。別のメッセージから始めれば別の会話になる。
