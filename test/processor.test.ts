@@ -119,6 +119,12 @@ describe('queue handler', () => {
     expect(ack).toHaveBeenCalledOnce();
   });
 
+  /**
+   * 503はAI SDKが2秒→4秒で2回再試行してから投げてくる（ADR 0008）。
+   * 既定の5秒では足りないので、この2件だけタイムアウトを延ばす。
+   */
+  const RETRY_TIMEOUT_MS = 20_000;
+
   it('notifies and retries a transient final failure so Cloudflare can move it to the DLQ', async () => {
     let slackNotified = false;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -137,7 +143,7 @@ describe('queue handler', () => {
     expect(thread.saved).toEqual([]);
     expect(ack).not.toHaveBeenCalled();
     expect(retry).toHaveBeenCalledOnce();
-  });
+  }, RETRY_TIMEOUT_MS);
 
   it('keeps retrying quietly while attempts remain', async () => {
     let slackNotified = false;
@@ -155,5 +161,5 @@ describe('queue handler', () => {
 
     expect(retry).toHaveBeenCalledOnce();
     expect(slackNotified).toBe(false);
-  });
+  }, RETRY_TIMEOUT_MS);
 });

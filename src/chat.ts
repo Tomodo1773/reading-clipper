@@ -89,8 +89,6 @@ export async function runChatTurn(options: {
       messages: [...options.history, userMessage],
       tools: createTools(options.env, options.receivedAt),
       stopWhen: stepCountIs(MAX_STEPS),
-      // 再試行はQueue側に一本化する。ここでも粘ると、失敗するまでの時間が二重に伸びる。
-      maxRetries: 0,
       // 毎回同じ言い回しに寄らせないため、事実の要約としては高めの温度にする（ADR 0004）。
       temperature: 0.8,
     });
