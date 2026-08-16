@@ -1,6 +1,6 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { APICallError } from '@ai-sdk/provider';
-import { generateText, type ModelMessage, stepCountIs } from 'ai';
+import { generateText, type ModelMessage, RetryError, stepCountIs } from 'ai';
 import { ClipError } from './errors';
 import { createTools } from './tools';
 import type { Env } from './types';
@@ -101,15 +101,22 @@ export async function runChatTurn(options: {
       temperature: 0.8,
     });
   } catch (error) {
+    // AI SDKは内部再試行を使い切るとAPICallErrorではなくRetryErrorを投げる。
+    // 中身を出さずに素通りさせると、stage・status・retryableの分類が全部落ちる（ADR 0008）。
+    const failure = RetryError.isInstance(error) ? error.lastError : error;
     // ステータスだけでは何を拒否されたか分からない。ゲートウェイの返す理由をログへ残す。
-    if (APICallError.isInstance(error)) {
+    if (APICallError.isInstance(failure)) {
       throw new ClipError(
-        `${error.message}: ${(error.responseBody ?? '').slice(0, 600)}`,
+        `${failure.message}: ${(failure.responseBody ?? '').slice(0, 600)}`,
         'chat',
-        error.isRetryable,
-        error.statusCode,
-        { cause: error },
+        failure.isRetryable,
+        failure.statusCode,
+        { cause: failure },
       );
+    }
+    // 中身を分類できなくても、モデル呼び出しで落ちたことだけは残す。
+    if (RetryError.isInstance(error)) {
+      throw new ClipError(error.message, 'chat', true, undefined, { cause: error });
     }
     throw error;
   }

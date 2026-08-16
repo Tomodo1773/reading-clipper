@@ -124,7 +124,7 @@ GitHub ActionsのCIではSocket Firewallを準備した後にlockfile固定で�
 3. 保存先private repository用のGitHub Appを作成してインストールする。**完了**
 4. X APIキーを用意する。**完了**（Bearer Token取得済み。X APIクレジット購入と支出上限設定は未完了）
 5. Firecrawl APIキーを取得する。**完了**
-6. Gemini APIキーを用意する。**完了**
+6. Gemini APIキーを用意する。**完了**／Google検索グラウンディングは無料枠では使えないため、Google Cloudプロジェクトを紐づけてGemini APIのbillingを有効にする。**未完了**
 7. Slack App/Botを作成し、URLを受け付ける設定を用意する。**完了**
    1. App HomeのMessages Tabを有効化し、ユーザーからのメッセージ送信を許可する。**完了**
    2. Bot Token Scopesに `chat:write` と `im:history` を追加する。**完了**／`reactions:write` の追加は**未完了**。追加後はSlack Appの再インストールが必要で、それまで 👀 は付かない（本処理は続く）。
@@ -206,6 +206,8 @@ GeminiはCloudflare AI GatewayのGoogle AI Studioパススルー経由で呼び�
 - GitHubへの保存成否
 
 会話の中で事実の裏取りが要るときは、GeminiのGoogle検索グラウンディング（provider-executedな `google_search`）で調べてから答える。検索するかどうかはAIが判断し、アプリ側では判定しない。出典はアプリが組み立てず、AIがサイト名や記事名として文中に添える。グラウンディングが返すURLは期限付きのリダイレクトURLなので、そのまま貼らせない。この形はGemini API追加利用規約が求めるSearch Suggestionsの表示を満たしておらず、個人利用の範囲に限って未準拠を受け入れる（[ADR 0009](docs/adr/0009-google-search-grounding.md)）。
+
+グラウンディングはGemini 3.x系の無料枠では使えないため、Gemini APIのbilling有効化が前提になる。無料枠のまま呼ぶと429で失敗し、待っても回復しない（[ADR 0009](docs/adr/0009-google-search-grounding.md)）。
 
 ## 初期バージョンに含めないもの
 

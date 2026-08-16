@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runChatTurn } from '../src/chat';
+import { ClipError } from '../src/errors';
 import { resetGitHubTokenCache } from '../src/github';
 import { base64ToUtf8 } from '../src/utils';
 import { generatePrivateKeyPem, jsonResponse, makeEnv, modelResponse } from './helpers';
@@ -320,6 +321,44 @@ describe('chat turn', () => {
       id: 'search-1',
     });
   });
+
+  /** AI SDKの内部再試行は2秒→4秒。使い切るまで待つため、この1件だけ延ばす。 */
+  const RETRY_TIMEOUT_MS = 20_000;
+
+  it('classifies a quota failure as chat even after the SDK exhausts its own retries', async () => {
+    // 429は再試行対象なのでAI SDKが2回やり直し、3回目でAPICallErrorではなくRetryErrorを投げる。
+    // 包みを剥がさないとstageがvalidationに化け、429と500の区別も消える（ADR 0008）。
+    let modelCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (!String(input).includes(':generateContent')) {
+        throw new Error(`unexpected request: ${String(input)}`);
+      }
+      modelCalls += 1;
+      return jsonResponse(
+        { error: { code: 429, message: 'You exceeded your current quota' } },
+        429,
+      );
+    });
+
+    const error = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'Honoの最新バージョンっていくつ？',
+      receivedAt: RECEIVED_AT,
+    }).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(modelCalls).toBe(3);
+    expect(error).toBeInstanceOf(ClipError);
+    const clipError = error as ClipError;
+    expect(clipError.stage).toBe('chat');
+    expect(clipError.status).toBe(429);
+    expect(clipError.retryable).toBe(true);
+    // ゲートウェイが返した理由はログに残す。
+    expect(clipError.message).toContain('You exceeded your current quota');
+  }, RETRY_TIMEOUT_MS);
 
   it('reports a permanent fetch failure as tool data instead of saving', async () => {
     let putCalled = false;
