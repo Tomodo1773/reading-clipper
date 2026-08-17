@@ -1,19 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchContent, fetchPageHead, loadContent } from '../src/fetchers';
-import { makeEnv } from './helpers';
-
-/**
- * `landedAt`を渡すと、リダイレクトを追った後の応答になる。
- * `new Response()`の`url`は常に空文字なので、実物と同じように見せるには差し込むしかない。
- */
-function htmlResponse(head: string, status = 200, landedAt?: string): Response {
-  const response = new Response(`<html><head>${head}</head><body>本文</body></html>`, {
-    status,
-    headers: { 'content-type': 'text/html' },
-  });
-  if (landedAt) Object.defineProperty(response, 'url', { value: landedAt });
-  return response;
-}
+import { htmlResponse, jsonResponse, makeEnv } from './helpers';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -278,10 +265,7 @@ describe('loadContent', () => {
         );
       }
       if (url.startsWith('https://zenn.dev/api/articles/')) {
-        return new Response(
-          JSON.stringify({ article: { title: 'Zennの記事', body_html: '<p>本文</p>' } }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        );
+        return jsonResponse({ article: { title: 'Zennの記事', body_html: '<p>本文</p>' } });
       }
       throw new Error(`unexpected request: ${url}`);
     });

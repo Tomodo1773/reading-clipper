@@ -24,7 +24,7 @@ export function makeEnv(overrides: Partial<Env> = {}): Env {
     } as unknown as DurableObjectNamespace<ThreadAgent>,
     CLIPS: testEnv.CLIPS,
     AI_GATEWAY_ID: 'reading-clipper-summarizer',
-    // ここだけは`wrangler.jsonc`の`vars`から取る。google_searchとsave_clipの併用を守る
+    // ここだけは`wrangler.jsonc`の`vars`から取る。google_searchと保存のツールの併用を守る
     // 回帰テストは、実際にデプロイされるモデル名で走らないと意味がない（ADR 0009）。
     AI_MODEL: testEnv.AI_MODEL,
     CLOUDFLARE_ACCOUNT_ID: 'test-account',
@@ -48,6 +48,20 @@ export function jsonResponse(value: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+/**
+ * 記事ページのHTML応答。
+ * `landedAt`を渡すとリダイレクトを追った後の応答になる。`new Response()`の`url`は常に
+ * 空文字なので、着いた先を見せるにはこうして差し込むしかない。
+ */
+export function htmlResponse(head: string, status = 200, landedAt?: string): Response {
+  const response = new Response(`<html><head>${head}</head><body>本文</body></html>`, {
+    status,
+    headers: { 'content-type': 'text/html' },
+  });
+  if (landedAt) Object.defineProperty(response, 'url', { value: landedAt });
+  return response;
 }
 
 /**

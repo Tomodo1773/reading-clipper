@@ -1,15 +1,25 @@
 import { ClipError, isRetryableStatus } from './errors';
+import { decodeEntities, findOgImage, parseAttributes } from './html';
 import type { Env, FetchedContent } from './types';
 import { canonicalizeUrl, classifyUrl, extractXPostId, extractZennArticleSlug } from './url';
 import { asRecord, assertOk, fetchWithTimeout, stringField } from './utils';
 
 const MAX_CONTENT_CHARS = 200_000;
 
+/**
+ * 各フェッチャーが知っていること。**どのURLの記事かは含めない。**
+ *
+ * クリップの識別（保存先パス・`source_url`・D1の`url`）は`canonicalUrl`から決まる。
+ * それを4つのフェッチャーがそれぞれ組み立てると、どれか1つがずれたときに黙って壊れる。
+ * 取り方を選んだ`fetchContent`が1箇所で決める（ADR 0012）。
+ */
+type FetchedBody = Omit<FetchedContent, 'canonicalUrl' | 'imageUrl'>;
+
 function firstHeading(markdown: string): string | undefined {
   return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
 }
 
-function finalize(content: FetchedContent): FetchedContent {
+function finalize(content: FetchedBody): FetchedBody {
   const normalized = content.markdown.trim();
   if (!normalized) {
     throw new ClipError('fetched content was empty', 'fetch', false);
@@ -44,14 +54,13 @@ function splitQiitaFrontMatter(markdown: string): {
   return { fields, body: markdown.slice(match[0].length) };
 }
 
-async function fetchQiita(url: URL): Promise<FetchedContent> {
+async function fetchQiita(url: URL): Promise<FetchedBody> {
   const markdownUrl = new URL(url);
   if (!markdownUrl.pathname.endsWith('.md')) markdownUrl.pathname += '.md';
   const response = await fetchWithTimeout(markdownUrl, { headers: { accept: 'text/markdown' } }, 15_000, 'fetch');
   assertOk(response, 'fetch');
   const { fields, body } = splitQiitaFrontMatter(await response.text());
   return finalize({
-    canonicalUrl: url.toString(),
     source: 'qiita',
     title: fields.title || (url.pathname.split('/').at(-1) ?? 'Qiita article'),
     author: fields.author || url.pathname.split('/').filter(Boolean)[0],
@@ -81,47 +90,8 @@ const BLOCK_TAGS = new Set([
   'section', 'table', 'ul',
 ]);
 
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-  hellip: '…',
-  mdash: '—',
-  ndash: '–',
-  laquo: '«',
-  raquo: '»',
-  copy: '©',
-  reg: '®',
-  trade: '™',
-};
-
 const TAG_PATTERN =
   /<!--[\s\S]*?-->|<\/([a-zA-Z][\w:-]*)[^>]*>|<([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
-
-const ATTRIBUTE_PATTERN =
-  /([a-zA-Z_:][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
-
-function decodeEntities(value: string): string {
-  return value.replace(/&(#[Xx]?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (match, entity: string) => {
-    if (!entity.startsWith('#')) return NAMED_ENTITIES[entity.toLowerCase()] ?? match;
-    const hex = entity[1] === 'x' || entity[1] === 'X';
-    const code = Number.parseInt(hex ? entity.slice(2) : entity.slice(1), hex ? 16 : 10);
-    return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
-  });
-}
-
-function parseAttributes(raw: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  for (const match of raw.matchAll(ATTRIBUTE_PATTERN)) {
-    const name = match[1]?.toLowerCase();
-    if (!name) continue;
-    attrs[name] = decodeEntities(match[2] ?? match[3] ?? match[4] ?? '');
-  }
-  return attrs;
-}
 
 function parseHtml(html: string): HtmlNode[] {
   const root: HtmlElement = { tag: '#root', attrs: {}, children: [] };
@@ -382,7 +352,7 @@ function zennHtmlToMarkdown(html: string): string {
   return renderBlocks(parseHtml(html)).trim();
 }
 
-async function fetchZenn(url: URL): Promise<FetchedContent> {
+async function fetchZenn(url: URL): Promise<FetchedBody> {
   const slug = extractZennArticleSlug(url);
   if (!slug) throw new ClipError('Zenn article slug was not found', 'validation', false);
   // 公開されているMarkdown原稿は無く、記事本文を構造付きで取れるのはこの非公式APIだけ。
@@ -399,7 +369,6 @@ async function fetchZenn(url: URL): Promise<FetchedContent> {
   const markdown = zennHtmlToMarkdown(bodyHtml);
   const user = asRecord(article?.user);
   return finalize({
-    canonicalUrl: url.toString(),
     source: 'zenn',
     title: stringField(article, 'title') ?? firstHeading(markdown) ?? slug,
     author: stringField(user, 'name') ?? stringField(user, 'username'),
@@ -430,7 +399,7 @@ function articleBody(article: Record<string, unknown> | undefined): string | und
   return undefined;
 }
 
-async function fetchX(url: URL, env: Env): Promise<FetchedContent> {
+async function fetchX(url: URL, env: Env): Promise<FetchedBody> {
   const postId = extractXPostId(url);
   if (!postId) throw new ClipError('X Post ID was not found', 'validation', false);
   const endpoint = new URL(`https://api.x.com/2/tweets/${postId}`);
@@ -466,7 +435,6 @@ async function fetchX(url: URL, env: Env): Promise<FetchedContent> {
   const markdown = `# ${title}\n\n${attribution ? `${attribution}\n\n` : ''}${body}`;
 
   return finalize({
-    canonicalUrl: url.toString(),
     source: 'x',
     title,
     author: username ? `@${username}` : displayName,
@@ -476,7 +444,7 @@ async function fetchX(url: URL, env: Env): Promise<FetchedContent> {
   });
 }
 
-async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
+async function fetchWeb(url: URL, env: Env): Promise<FetchedBody> {
   const response = await fetchWithTimeout(
     'https://api.firecrawl.dev/v2/scrape',
     {
@@ -521,7 +489,6 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
   if (!markdown) throw new ClipError('Firecrawl returned no Markdown', 'fetch', false);
 
   return finalize({
-    canonicalUrl: url.toString(),
     source: 'web',
     title: stringField(metadata, 'title') ?? firstHeading(markdown) ?? url.hostname,
     author: stringField(metadata, 'author'),
@@ -532,10 +499,10 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
 }
 
 /** `<head>`はこの範囲に収まる。全文を読むと記事によっては数MBになる。 */
-const OG_IMAGE_SCAN_BYTES = 256 * 1024;
+const PAGE_HEAD_SCAN_BYTES = 256 * 1024;
 
 /** 既定のUser-Agentだとmetaを返さないサイトがあるため、素性を書いたものを送る。 */
-const OG_IMAGE_USER_AGENT = 'Mozilla/5.0 (compatible; reading-clipper/1.0)';
+const PAGE_HEAD_USER_AGENT = 'Mozilla/5.0 (compatible; reading-clipper/1.0)';
 
 /** `</head>`まで、または上限まで読んで打ち切る。本文は要らない。 */
 async function readHead(response: Response, limit: number): Promise<string> {
@@ -558,17 +525,6 @@ async function readHead(response: Response, limit: number): Promise<string> {
   return html;
 }
 
-function findOgImage(html: string): string | undefined {
-  for (const tag of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attrs = parseAttributes(tag[0].slice('<meta'.length, -1));
-    const key = (attrs.property ?? attrs.name ?? '').toLowerCase();
-    if (key !== 'og:image' && key !== 'og:image:url' && key !== 'og:image:secure_url') continue;
-    const content = attrs.content?.trim();
-    if (content) return content;
-  }
-  return undefined;
-}
-
 /**
  * 記事ページの`<head>`だけを読んで、**着いた先のURL**と`og:image`を返す（ADR 0011 / ADR 0012）。
  *
@@ -588,7 +544,7 @@ export async function fetchPageHead(
   try {
     const response = await fetchWithTimeout(
       pageUrl,
-      { headers: { accept: 'text/html', 'user-agent': OG_IMAGE_USER_AGENT } },
+      { headers: { accept: 'text/html', 'user-agent': PAGE_HEAD_USER_AGENT } },
       15_000,
       'fetch',
     );
@@ -598,20 +554,14 @@ export async function fetchPageHead(
       await response.body?.cancel();
       return { resolvedUrl };
     }
-    const found = findOgImage(await readHead(response, OG_IMAGE_SCAN_BYTES));
-    if (!found) return { resolvedUrl };
-    // 相対パスで書くサイトがある。Slackへ渡せるのは絶対URLだけ。
-    const image = new URL(found, resolvedUrl);
-    const imageUrl =
-      image.protocol === 'https:' || image.protocol === 'http:' ? image.toString() : undefined;
-    return { resolvedUrl, imageUrl };
+    const head = await readHead(response, PAGE_HEAD_SCAN_BYTES);
+    return { resolvedUrl, imageUrl: findOgImage(head, resolvedUrl) };
   } catch {
     return { resolvedUrl: pageUrl };
   }
 }
 
-export async function fetchContent(rawUrl: string, env: Env): Promise<FetchedContent> {
-  const url = canonicalizeUrl(rawUrl);
+function fetchBody(url: URL, env: Env): Promise<FetchedBody> {
   switch (classifyUrl(url)) {
     case 'qiita':
       return fetchQiita(url);
@@ -622,6 +572,12 @@ export async function fetchContent(rawUrl: string, env: Env): Promise<FetchedCon
     case 'web':
       return fetchWeb(url, env);
   }
+}
+
+export async function fetchContent(rawUrl: string, env: Env): Promise<FetchedContent> {
+  const url = canonicalizeUrl(rawUrl);
+  // どのURLの記事かは、取り方を選んだここが決める。フェッチャーは中身だけを返す。
+  return { ...(await fetchBody(url, env)), canonicalUrl: url.toString() };
 }
 
 /**

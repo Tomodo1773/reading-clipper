@@ -5,7 +5,14 @@ import { runChatTurn } from '../src/chat';
 import { ClipError } from '../src/errors';
 import { resetGitHubTokenCache } from '../src/github';
 import { base64ToUtf8 } from '../src/utils';
-import { generatePrivateKeyPem, jsonResponse, makeEnv, modelResponse, resetClips } from './helpers';
+import {
+  generatePrivateKeyPem,
+  htmlResponse,
+  jsonResponse,
+  makeEnv,
+  modelResponse,
+  resetClips,
+} from './helpers';
 
 const RECEIVED_AT = '2026-08-15T00:00:00.000Z';
 const ARTICLE = '---\ntitle: Worker設計\nauthor: alice\n---\n## 概要\n\nQueueで重い処理を分離する。';
@@ -31,8 +38,14 @@ interface Recorded {
 /**
  * `modelReplies` はモデルが呼ばれた順に返す応答。
  * 記事の取得とGitHubは実物のコードを通す。
+ *
+ * `extraRoutes` は既定の経路より先に引く。既定はQiitaの1記事だけを用意しているので、
+ * 別のサイトを出したいテストはここへ足す（テストごとに`fetch`の分岐を書き直さない）。
  */
-function mockWorld(modelReplies: Response[]): Recorded {
+function mockWorld(
+  modelReplies: Response[],
+  extraRoutes: (url: string) => Response | undefined = () => undefined,
+): Recorded {
   const recorded: Recorded = {
     modelBodies: [],
     savedPath: '',
@@ -43,16 +56,13 @@ function mockWorld(modelReplies: Response[]): Recorded {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
+    const extra = extraRoutes(url);
+    if (extra) return extra;
     if (url.includes('/app/installations/') && method === 'POST') {
       return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
     }
     // load_contentはリダイレクト解決とog:imageのために、記事ページ本体も1回GETする。
-    if (url === 'https://qiita.com/alice/items/abc') {
-      return new Response('<html><head><title>Worker設計</title></head><body></body></html>', {
-        status: 200,
-        headers: { 'content-type': 'text/html' },
-      });
-    }
+    if (url === 'https://qiita.com/alice/items/abc') return htmlResponse('<title>Worker設計</title>');
     if (url === 'https://qiita.com/alice/items/abc.md') {
       recorded.articleFetches += 1;
       return new Response(ARTICLE, { status: 200 });
@@ -231,48 +241,22 @@ describe('chat turn', () => {
    * リダイレクトの着いた先で種類を判定するのでZenn専用の取り方が選ばれる（ADR 0012）。
    */
   it('saves the article the redirects landed on, not the URL that was sent', async () => {
-    const recorded: { savedPath: string } = { savedPath: '' };
-    let modelCall = 0;
-    const modelReplies = [
-      loadCallReply('https://share.google/tQD'),
-      // AIはロードが返した着いた先のURLを渡す。
-      saveCallReply('https://zenn.dev/alice/articles/abc123def456'),
-      modelResponse([{ text: 'Zennの記事だったわよ。' }]),
-    ];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      const url = String(input);
-      const method = init?.method ?? 'GET';
-      if (url.includes(':generateContent')) {
-        const reply = modelReplies[modelCall];
-        modelCall += 1;
-        if (!reply) throw new Error(`unexpected model call #${modelCall}`);
-        return reply;
-      }
-      if (url === 'https://share.google/tQD') {
-        const response = new Response('<html><head></head><body></body></html>', {
-          status: 200,
-          headers: { 'content-type': 'text/html' },
-        });
-        Object.defineProperty(response, 'url', {
-          value: 'https://zenn.dev/alice/articles/abc123def456',
-        });
-        return response;
-      }
-      if (url.startsWith('https://zenn.dev/api/articles/')) {
-        return jsonResponse({ article: { title: 'Zennの記事', body_html: '<p>本文</p>' } });
-      }
-      if (url.includes('/app/installations/')) {
-        return jsonResponse({ token: 't', expires_at: '2099-01-01T00:00:00Z' });
-      }
-      if (url.includes('/repos/example/clips/contents/') && method === 'GET') {
-        return jsonResponse({ message: 'Not Found' }, 404);
-      }
-      if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
-        recorded.savedPath = decodeURIComponent(url.split('/contents/')[1] ?? '');
-        return jsonResponse({ content: { sha: 's', html_url: 'https://github.com/x' } }, 201);
-      }
-      throw new Error(`unexpected request: ${method} ${url}`);
-    });
+    const article = 'https://zenn.dev/alice/articles/abc123def456';
+    const recorded = mockWorld(
+      [
+        loadCallReply('https://share.google/tQD'),
+        // AIはロードが返した着いた先のURLを渡す。
+        saveCallReply(article),
+        modelResponse([{ text: 'Zennの記事だったわよ。' }]),
+      ],
+      (url) => {
+        if (url === 'https://share.google/tQD') return htmlResponse('', 200, article);
+        if (url.startsWith('https://zenn.dev/api/articles/')) {
+          return jsonResponse({ article: { title: 'Zennの記事', body_html: '<p>本文</p>' } });
+        }
+        return undefined;
+      },
+    );
 
     const turn = await runChatTurn({
       env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
@@ -283,15 +267,13 @@ describe('chat turn', () => {
 
     // 中継URLだったことはAIにも伝わる。
     expect(toolOutput(turn.appended, 'load_content')).toMatchObject({
-      url: 'https://zenn.dev/alice/articles/abc123def456',
+      url: article,
       requested_url: 'https://share.google/tQD',
       source: 'zenn',
     });
     // clips/share.google/ には作られない。
     expect(recorded.savedPath).toBe('clips/zenn.dev/Zennの記事.md');
-    expect(await testEnv.CLIPS.prepare('SELECT url FROM clips').first()).toEqual({
-      url: 'https://zenn.dev/alice/articles/abc123def456',
-    });
+    expect(await testEnv.CLIPS.prepare('SELECT url FROM clips').first()).toEqual({ url: article });
   });
 
   it('keeps the thought signature in history and sends it back on the next turn', async () => {

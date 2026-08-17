@@ -41,7 +41,10 @@ async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string)
   return { saved: true, path, github_url: saved.htmlUrl, title: content.title };
 }
 
-/** 同じ記事を指す書き方の揺れを吸収する。正規化できないURLは、来た文字列のまま鍵にする。 */
+/**
+ * ロード済みの本文を引く鍵。同じ記事を指す書き方の揺れを、保存側でも吸収する。
+ * URLとして扱えない文字列はそのまま鍵にする。どのみち引けず、`not_loaded`になればよい。
+ */
 function memoKey(rawUrl: string): string {
   try {
     return canonicalizeUrl(rawUrl).toString();
@@ -91,13 +94,15 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
         try {
           const content = await loadContent(url, env);
           // AIが渡してくるのは入力したURLか着いた先のURLのどちらか。両方から引けるようにする。
-          loaded.set(memoKey(url), content);
-          loaded.set(memoKey(content.canonicalUrl), content);
+          const requestedKey = memoKey(url);
+          const resolvedKey = memoKey(content.canonicalUrl);
+          loaded.set(requestedKey, content);
+          loaded.set(resolvedKey, content);
           return {
             loaded: true,
             url: content.canonicalUrl,
             // 中継URLだったことは、AIが「読み物ではなかった」と判断する材料になる。
-            requested_url: memoKey(url) === memoKey(content.canonicalUrl) ? undefined : url,
+            requested_url: requestedKey === resolvedKey ? undefined : url,
             source: content.source,
             title: content.title,
             author: content.author,

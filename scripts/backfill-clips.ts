@@ -19,6 +19,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { clipExcerpt } from '../src/excerpt.ts';
+import { findOgImage } from '../src/html.ts';
 
 /** og:imageの取得を同時に何本走らせるか。相手のサイトを叩きすぎない範囲にする。 */
 const IMAGE_CONCURRENCY = 4;
@@ -75,6 +76,7 @@ async function markdownFiles(root: string): Promise<string[]> {
     .map((entry) => join(entry.parentPath, entry.name));
 }
 
+/** 抜き出し方はWorker側と共有する。ここに書き写すと、片方だけが変わる。 */
 async function fetchOgImage(pageUrl: string): Promise<string | undefined> {
   try {
     const response = await fetch(pageUrl, {
@@ -84,27 +86,10 @@ async function fetchOgImage(pageUrl: string): Promise<string | undefined> {
     if (!response.ok) return undefined;
     const html = await response.text();
     const head = html.slice(0, html.search(/<\/head\s*>/i) + 1 || html.length);
-    for (const tag of head.matchAll(/<meta\b[^>]*>/gi)) {
-      const key = tag[0].match(/(?:property|name)\s*=\s*"([^"]*)"/i)?.[1]?.toLowerCase();
-      if (key !== 'og:image' && key !== 'og:image:url' && key !== 'og:image:secure_url') continue;
-      const content = tag[0].match(/content\s*=\s*"([^"]*)"/i)?.[1];
-      if (!content) continue;
-      const resolved = new URL(decodeHtml(content), response.url || pageUrl);
-      if (resolved.protocol === 'https:' || resolved.protocol === 'http:') return resolved.toString();
-    }
-    return undefined;
+    return findOgImage(head, response.url || pageUrl);
   } catch {
     return undefined;
   }
-}
-
-function decodeHtml(value: string): string {
-  return value
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
 }
 
 /** 順番に取り出して数本だけ並走させる。件数が増えても同時接続数は変わらない。 */

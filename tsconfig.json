@@ -13,7 +13,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true,
-    // バックフィルが src/excerpt.ts を共有する。`--experimental-strip-types` は
+    // バックフィルが src/excerpt.ts と src/html.ts を共有する。`--experimental-strip-types` は
     // 相対importの拡張子を書き換えないため、`.ts`付きで書く必要がある。
     "allowImportingTsExtensions": true
   },
