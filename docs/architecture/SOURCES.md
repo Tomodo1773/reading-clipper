@@ -5,6 +5,7 @@ Retrieved on 2026-08-17. Brand assets are used only to identify the correspondin
 | Asset | Owner | Official page or repository | Direct asset / archive member | Usage notes |
 | --- | --- | --- | --- | --- |
 | Slack | Slack Technologies, LLC | https://join.slack.com/media-kit | https://a.slack-edge.com/80588/marketing/img/meta/slack_hash_256.png | Official Slack-hosted mark; used unchanged and with clear space |
+| Cloudflare company logo | Cloudflare, Inc. | https://www.cloudflare.com/press/press-kit/ | https://cf-assets.www.cloudflare.com/dzlvafdwdttg/2Twekn3xyYyd94qDYAl0ed/9ab649caa40958f195166e0d9f5d9a04/Logos.zip?download=true — `CF-Logo 1.png` | Official company logo; colors and proportions preserved |
 | Cloudflare Workers | Cloudflare, Inc. | https://github.com/cloudflare/cloudflare-docs/tree/production/src/icons | https://raw.githubusercontent.com/cloudflare/cloudflare-docs/production/src/icons/workers.svg | Official Cloudflare Docs product icon; used unchanged |
 | Cloudflare Queues | Cloudflare, Inc. | https://github.com/cloudflare/cloudflare-docs/tree/production/src/icons | https://raw.githubusercontent.com/cloudflare/cloudflare-docs/production/src/icons/queues.svg | Official Cloudflare Docs product icon; used unchanged |
 | Cloudflare Durable Objects | Cloudflare, Inc. | https://github.com/cloudflare/cloudflare-docs/tree/production/src/icons | https://raw.githubusercontent.com/cloudflare/cloudflare-docs/production/src/icons/durable-objects.svg | Official Cloudflare Docs product icon; used unchanged |
