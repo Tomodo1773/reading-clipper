@@ -125,7 +125,7 @@ function digestTurn(clips: DigestClip[]): ModelMessage[] {
   ];
 }
 
-/** 日曜9時（JST）に1通投稿する。cronトリガーはUTC指定なので`0 0 * * 0`。 */
+/** 日曜9時（JST）に1通投稿する。cronトリガーはUTC指定なので`0 0 * * SUN`。 */
 export async function runWeeklyDigest(env: Env, now = new Date()): Promise<void> {
   const clips = await selectDigestClips(env);
   const channel = await openSlackDirectMessage(env.SLACK_BOT_TOKEN, env.SLACK_ALLOWED_USER_ID);

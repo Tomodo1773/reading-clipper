@@ -45,7 +45,7 @@ README.mdは「未読・既読状態の管理」と「未読記事の定期通�
 
 ### 週次ダイジェスト
 
-- 日曜9時（JST）にSlackのDMへ1通投稿する。Cloudflareのcronトリガーは**UTC指定**なので `0 0 * * 0` を `wrangler.jsonc` の `triggers.crons` に書き、`scheduled` ハンドラを `fetch` / `queue` と同じ既定エクスポートへ足す。
+- 日曜9時（JST）にSlackのDMへ1通投稿する。Cloudflareのcronトリガーは**UTC指定**なので `0 0 * * SUN` を `wrangler.jsonc` の `triggers.crons` に書き、`scheduled` ハンドラを `fetch` / `queue` と同じ既定エクスポートへ足す。曜日フィールドは `1-7` / `MON-SUN` で、標準的なcronの `0`（日曜）は `invalid cron string` で拒否される。
 - `scheduled` にはSlackのイベントが無く、投稿先の `channel` が手元に無い。**`conversations.open` に `users: SLACK_ALLOWED_USER_ID` を渡して毎回引く。** DMのチャンネルIDをsecretとして持つ案もあるが、既にある `SLACK_ALLOWED_USER_ID` から導ける値のために管理する値を増やさない。代償はBot Token Scopeへの `im:write` の追加とSlack Appの再インストールで、これは一度きりのコストである。
 - 毎回**ちょうど7件**を出す。セクション分割をせず、件数を保存量に連動させない。
 

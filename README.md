@@ -172,7 +172,9 @@ pnpm wrangler secret put SLACK_ALLOWED_USER_ID
     pnpm wrangler d1 execute reading-clipper-clips-db --remote --file=backfill.sql
     ```
 
-cronの動作は日曜まで待たずに確認できる。`pnpm wrangler dev --test-scheduled` で起動し、`curl "http://localhost:8787/__scheduled?cron=0+0+*+*+0"` を叩くと `scheduled` ハンドラが走る。
+cronの動作は日曜まで待たずに確認できる。`pnpm wrangler dev` で起動し、`curl "http://localhost:8787/cdn-cgi/handler/scheduled"` を叩くと `scheduled` ハンドラが走る。
+
+Cloudflareのcronは曜日フィールドが `1-7` / `MON-SUN` で、標準的なcronの `0`（日曜）を受け付けない。`deploy --dry-run` では検出できず、`wrangler deploy` がAPIに弾かれて初めて分かる。しかもコードのアップロードは成功した後にトリガー登録だけが失敗する**部分適用**になるため、「デプロイされたのにcronが動かない」状態になる。デプロイの成否はコマンドの終了コードで確認する。
 
 Slackイベント受信、Queue処理、本文取得、GitHub保存、AI要約、Slackへのスレッド返信までを通すE2Eを確認済み。Qiita、Zenn、X、一般Webの4系統それぞれでの取得確認と要約内容の確認は未完了。
 
