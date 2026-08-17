@@ -40,13 +40,13 @@ async function deterministicUuid(seed: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/** okErrorsに挙げたSlack APIエラーは失敗として扱わない。 */
+/** okErrorsに挙げたSlack APIエラーは失敗として扱わない（その場合は応答を返さない）。 */
 async function callSlackApi(
   method: string,
   token: string,
   body: Record<string, unknown>,
   okErrors: readonly string[] = [],
-): Promise<void> {
+): Promise<Record<string, unknown> | undefined> {
   const response = await fetchWithTimeout(
     `https://slack.com/api/${method}`,
     {
@@ -68,10 +68,10 @@ async function callSlackApi(
     payload = undefined;
   }
   const record = asRecord(payload);
-  if (response.ok && record?.ok === true) return;
+  if (response.ok && record?.ok === true) return record;
 
   const apiError = stringField(record, 'error') ?? `HTTP ${response.status}`;
-  if (okErrors.includes(apiError)) return;
+  if (okErrors.includes(apiError)) return undefined;
   throw new ClipError(
     `Slack ${method} failed: ${apiError}`,
     'slack',
@@ -80,21 +80,62 @@ async function callSlackApi(
   );
 }
 
+/**
+ * 投稿したメッセージのtsを返す。
+ * 週次ダイジェストはこのtsをスレッドのキーにするため、返り値が要る（ADR 0010）。
+ */
 export async function postSlackMessage(options: {
   token: string;
   channel: string;
-  threadTs: string;
+  /** 省略するとチャンネル直下へ投稿する。 */
+  threadTs?: string;
+  /** blocksを付けたときも通知とアクセシビリティのために必ず入れる。 */
   text: string;
+  blocks?: unknown[];
   idempotencyKey: string;
-}): Promise<void> {
-  await callSlackApi('chat.postMessage', options.token, {
+}): Promise<string> {
+  const result = await callSlackApi('chat.postMessage', options.token, {
     channel: options.channel,
     thread_ts: options.threadTs,
     text: options.text,
+    blocks: options.blocks,
     client_msg_id: await deterministicUuid(options.idempotencyKey),
     unfurl_links: false,
     unfurl_media: false,
   });
+  const ts = stringField(result, 'ts');
+  if (!ts) throw new ClipError('Slack chat.postMessage returned no ts', 'slack', true);
+  return ts;
+}
+
+/** ダイジェストから片付けた行を落とすために、投稿済みメッセージを差し替える。 */
+export async function updateSlackMessage(options: {
+  token: string;
+  channel: string;
+  ts: string;
+  text: string;
+  blocks: unknown[];
+}): Promise<void> {
+  await callSlackApi('chat.update', options.token, {
+    channel: options.channel,
+    ts: options.ts,
+    text: options.text,
+    blocks: options.blocks,
+  });
+}
+
+/**
+ * ユーザーとのDMを開いてチャンネルIDを返す。
+ *
+ * cronで動く`scheduled`にはSlackのイベントが無く、投稿先の`channel`が手元に無い。
+ * 既に開いているDMなら同じIDが返るだけで、新しい会話は作られない。
+ * この呼び出しのためにBot Token Scopeへ`im:write`が要る。
+ */
+export async function openSlackDirectMessage(token: string, userId: string): Promise<string> {
+  const result = await callSlackApi('conversations.open', token, { users: userId });
+  const channel = stringField(asRecord(result?.channel), 'id');
+  if (!channel) throw new ClipError('Slack conversations.open returned no channel', 'slack', true);
+  return channel;
 }
 
 /** Slackのイベント再送で同じ絵文字を2度付けにいくため、already_reactedは成功として扱う。 */

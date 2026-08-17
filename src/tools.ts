@@ -1,6 +1,7 @@
 import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { recordClip, setClipDismissed } from './clips';
 import { asClipError } from './errors';
 import { fetchContent } from './fetchers';
 import { getGitHubFile, putGitHubFile } from './github';
@@ -20,6 +21,14 @@ async function saveClip(env: Env, rawUrl: string, receivedAt: string) {
   // 既存ファイルの更新にはshaが要る。同じタイトルの記事は上書きする。
   const existing = await getGitHubFile(env, path);
   const saved = await putGitHubFile(env, path, renderClipMarkdown(content, receivedAt), existing?.sha);
+  // D1は台帳ではなく注釈レイヤーなので、書けなくても保存は成立させる（ADR 0010）。
+  // ただしこの行が入らないと、そのクリップはダイジェストに永久に出てこない。
+  try {
+    await recordClip(env, path, canonicalUrl, receivedAt);
+  } catch (error) {
+    const clipError = asClipError(error, 'clips');
+    console.warn(JSON.stringify({ stage: clipError.stage, message: clipError.message, path }));
+  }
   return {
     saved: true,
     path,
@@ -74,6 +83,40 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
           );
           // どこで落ちたかはstageで足りる。散文はモデルが書く。
           return { saved: false, failed_at: clipError.stage };
+        }
+      },
+    }),
+    /**
+     * 単体のみ。一括を扱うツールは作らない（ADR 0010）。
+     * これは利便性ではなく、記事本文とWeb検索結果という第三者のテキストが
+     * モデルの文脈に入っている前提での判断（ADR 0006 / 0009）。
+     */
+    set_clip_dismissed: tool({
+      description: [
+        '保存済みのクリップに「片付けた」印を付ける、または外す。',
+        '週次ダイジェストや保存の後に「これはもういい」「片付けて」と言われたときに使う。',
+        '片付けた印が付いたクリップは、週次ダイジェストに出てこなくなる。読んだかどうかは記録しない。',
+        'pathはダイジェストの一覧やsave_clipの結果に出てきたものをそのまま渡す。1回につき1件。',
+      ].join(''),
+      inputSchema: z.object({
+        path: z.string().describe('clips/ から始まるクリップのパス。'),
+        dismissed: z.boolean().describe('片付けるならtrue、印を外して戻すならfalse。'),
+      }),
+      execute: async ({ path, dismissed }) => {
+        try {
+          // 台帳に無いパスは更新できない。モデルが組み立てた見当違いのパスを黙って成功にしない。
+          const found = await setClipDismissed(env, path, dismissed, receivedAt);
+          return found ? { updated: true, path, dismissed } : { updated: false, unknown_path: path };
+        } catch (error) {
+          const clipError = asClipError(error, 'clips');
+          console.warn(
+            JSON.stringify({
+              stage: clipError.stage,
+              message: clipError.message,
+              tool: 'set_clip_dismissed',
+            }),
+          );
+          return { updated: false, failed_at: clipError.stage };
         }
       },
     }),

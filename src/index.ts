@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { dismissDigestClip, DISMISS_ACTION_ID, runWeeklyDigest } from './digest';
 import { asClipError } from './errors';
 import { handleQueueMessage } from './processor';
 import { addSlackReaction, verifySlackSignature } from './slack';
@@ -23,6 +24,15 @@ interface SlackEventEnvelope {
     ts?: string;
     thread_ts?: string;
   };
+}
+
+/** ダイジェストのボタン押下。Events APIとは別のRequest URLへ届く（ADR 0010）。 */
+interface SlackInteractivityPayload {
+  team?: { id?: string };
+  user?: { id?: string };
+  channel?: { id?: string };
+  message?: { ts?: string; blocks?: unknown[] };
+  actions?: Array<{ action_id?: string; value?: string }>;
 }
 
 /** 受け取った印としてメッセージへ付ける絵文字。完了時に外さない。 */
@@ -119,9 +129,82 @@ app.post('/slack/events', async (c) => {
   return c.json({ ok: true });
 });
 
+app.post('/slack/interactivity', async (c) => {
+  // Slackはインタラクティブpayloadも`v0:{timestamp}:{rawBody}`で署名する。
+  // bodyは`payload=`のform urlencodedなので、検証にはパース前の生の文字列を使う。
+  // workerdは`.text()`をform urlencodedに対して警告するため、バイト列から自分で起こす。
+  const body = new TextDecoder().decode(await c.req.arrayBuffer());
+  const valid = await verifySlackSignature(
+    body,
+    c.req.header('x-slack-request-timestamp') ?? null,
+    c.req.header('x-slack-signature') ?? null,
+    c.env.SLACK_SIGNING_SECRET,
+  );
+  if (!valid) return c.json({ error: 'invalid_signature' }, 401);
+
+  let payload: SlackInteractivityPayload;
+  try {
+    const encoded = new URLSearchParams(body).get('payload') ?? '';
+    payload = JSON.parse(encoded) as SlackInteractivityPayload;
+  } catch {
+    return c.json({ error: 'invalid_payload' }, 400);
+  }
+
+  if (
+    payload.team?.id !== c.env.SLACK_ALLOWED_TEAM_ID ||
+    !isAllowedSlackUser(payload.user?.id ?? '', c.env.SLACK_ALLOWED_USER_ID)
+  ) {
+    return c.json({ ok: true });
+  }
+
+  const action = payload.actions?.[0];
+  const path = action?.action_id === DISMISS_ACTION_ID ? action.value : undefined;
+  const channel = payload.channel?.id;
+  const messageTs = payload.message?.ts;
+  if (!path || !channel || !messageTs) return c.json({ ok: true });
+
+  // Slackは3秒で切る。D1の更新とメッセージの差し替えは応答を返してから行う。
+  c.executionCtx.waitUntil(
+    dismissDigestClip(c.env, {
+      path,
+      channel,
+      messageTs,
+      blocks: payload.message?.blocks ?? [],
+    }).catch((error: unknown) => {
+      const clipError = asClipError(error, 'clips');
+      console.error(
+        JSON.stringify({
+          stage: clipError.stage,
+          status: clipError.status,
+          message: clipError.message,
+          dismissFailed: path,
+        }),
+      );
+    }),
+  );
+  return c.json({ ok: true });
+});
+
 export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch<ChatJob>, env: Env): Promise<void> {
     await Promise.all(batch.messages.map((message) => handleQueueMessage(message, env)));
+  },
+  /** 週次ダイジェスト（ADR 0010）。失敗は再試行されないので、事実だけログへ残す。 */
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    try {
+      await runWeeklyDigest(env);
+    } catch (error) {
+      const clipError = asClipError(error, 'slack');
+      console.error(
+        JSON.stringify({
+          digest: true,
+          stage: clipError.stage,
+          status: clipError.status,
+          message: clipError.message,
+        }),
+      );
+      throw error;
+    }
   },
 } satisfies ExportedHandler<Env, ChatJob>;

@@ -3,7 +3,8 @@ export type ProcessingStage =
   | 'fetch'
   | 'chat'
   | 'github'
-  | 'slack';
+  | 'slack'
+  | 'clips';
 
 export class ClipError extends Error {
   constructor(

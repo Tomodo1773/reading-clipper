@@ -60,7 +60,7 @@ function queueMessage(overrides: Partial<{ body: ChatJob; attempts: number }> = 
 
 describe('queue handler', () => {
   it('acks a permanently invalid message after notifying Slack', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ ok: true }));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ ok: true, ts: '1700000000.000200' }));
     const { ack, retry, message } = queueMessage({
       body: { ...job, version: 1 } as unknown as ChatJob,
     });
@@ -81,7 +81,7 @@ describe('queue handler', () => {
       }
       if (url === 'https://slack.com/api/chat.postMessage') {
         slackTexts.push(JSON.parse(String(init?.body)).text);
-        return jsonResponse({ ok: true });
+        return jsonResponse({ ok: true, ts: '1700000000.000200' });
       }
       throw new Error(`unexpected request: ${url}`);
     });
@@ -107,7 +107,7 @@ describe('queue handler', () => {
         throw new Error(`unexpected request: ${String(input)}`);
       }
       slackTexts.push(JSON.parse(String(init?.body)).text);
-      return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true, ts: '1700000000.000200' });
     });
     const thread = threadStub({ reply: '一度だけ答えるわ。' });
     const { ack, message } = queueMessage();
@@ -130,7 +130,7 @@ describe('queue handler', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       if (String(input) === 'https://slack.com/api/chat.postMessage') {
         slackNotified = true;
-        return jsonResponse({ ok: true });
+        return jsonResponse({ ok: true, ts: '1700000000.000200' });
       }
       return jsonResponse({ error: { message: 'gateway is unhappy' } }, 503);
     });
@@ -150,7 +150,7 @@ describe('queue handler', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       if (String(input) === 'https://slack.com/api/chat.postMessage') {
         slackNotified = true;
-        return jsonResponse({ ok: true });
+        return jsonResponse({ ok: true, ts: '1700000000.000200' });
       }
       return jsonResponse({ error: { message: 'gateway is unhappy' } }, 503);
     });

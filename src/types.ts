@@ -33,6 +33,8 @@ export interface Env {
   CLIP_QUEUE: Queue<ChatJob>;
   /** スレッド単位の会話状態。`{channel}:{thread_ts}` で引く。 */
   THREAD: DurableObjectNamespace<ThreadAgent>;
+  /** 読書状態。GitHubに対する注釈レイヤーで、母集団の正本ではない（ADR 0010）。 */
+  CLIPS: D1Database;
   AI_GATEWAY_ID: string;
   AI_MODEL: string;
 

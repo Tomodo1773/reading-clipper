@@ -25,6 +25,9 @@ package managerはpnpmで、versionは `package.json` の `packageManager` で�
 | Worker設定の検証 | `pnpm wrangler deploy --dry-run` |
 | ローカル起動 | `pnpm dev` |
 | AI Gatewayの作成・更新 | `pnpm setup:aigw` |
+| D1スキーマの適用 | `pnpm wrangler d1 execute reading-clipper-clips-db --local --file=./schema.sql`（本番は `--remote`） |
+
+D1のスキーマは `wrangler deploy` では適用されません。`schema.sql` を変更したら `--remote` と `--local` の両方へ手で流してください。`pnpm test` は `schema.sql` をそのまま読んでテーブルを作るため、事前準備は要りません。
 
 `pnpm typecheck` は `wrangler types` で `worker-configuration.d.ts` を生成してから、スクリプト用（`tsconfig.json`）とWorker用（`src/tsconfig.json`）の2つを検査します。Workersのグローバル型とNodeの型は `fetch` などの定義が衝突するため、意図的に分けています。
 

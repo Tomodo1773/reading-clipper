@@ -1,6 +1,18 @@
 import { env as testEnv } from 'cloudflare:test';
+// 本番と同じ定義でテストする。テーブル定義をここへ書き写すと、片方だけが変わる。
+import schema from '../schema.sql?raw';
 import type { ThreadAgent } from '../src/thread';
 import type { ChatJob, Env } from '../src/types';
+
+/**
+ * D1のテーブルを用意して空にする。
+ * vitest-pool-workersはテストごとにストレージを巻き戻すので、beforeEachで呼ぶ。
+ */
+export async function resetClips(): Promise<void> {
+  // `exec`は改行で文を割るため、複数行のDDLには使えない。コメントだけ落として1文として流す。
+  await testEnv.CLIPS.prepare(schema.replace(/--[^\n]*/g, '')).run();
+  await testEnv.CLIPS.prepare('DELETE FROM clips').run();
+}
 
 export function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -10,6 +22,7 @@ export function makeEnv(overrides: Partial<Env> = {}): Env {
         throw new Error('THREAD was used without a stub in this test');
       },
     } as unknown as DurableObjectNamespace<ThreadAgent>,
+    CLIPS: testEnv.CLIPS,
     AI_GATEWAY_ID: 'reading-clipper-summarizer',
     // ここだけは`wrangler.jsonc`の`vars`から取る。google_searchとsave_clipの併用を守る
     // 回帰テストは、実際にデプロイされるモデル名で走らないと意味がない（ADR 0009）。
@@ -77,11 +90,12 @@ export async function generatePrivateKeyPem(): Promise<string> {
   return (await generateGitHubAppKeyPair()).privateKeyPem;
 }
 
-export async function signedSlackRequest(
-  payload: unknown,
-  signingSecret = 'test-signing-secret',
+async function signedSlackPost(
+  path: string,
+  body: string,
+  contentType: string,
+  signingSecret: string,
 ): Promise<Request> {
-  const body = JSON.stringify(payload);
   const timestamp = String(Math.floor(Date.now() / 1000));
   const key = await crypto.subtle.importKey(
     'raw',
@@ -94,13 +108,38 @@ export async function signedSlackRequest(
     await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`v0:${timestamp}:${body}`)),
   );
   const signature = `v0=${[...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
-  return new Request('https://worker.example/slack/events', {
+  return new Request(`https://worker.example${path}`, {
     method: 'POST',
     headers: {
-      'content-type': 'application/json',
+      'content-type': contentType,
       'x-slack-request-timestamp': timestamp,
       'x-slack-signature': signature,
     },
     body,
   });
+}
+
+export async function signedSlackRequest(
+  payload: unknown,
+  signingSecret = 'test-signing-secret',
+): Promise<Request> {
+  return signedSlackPost(
+    '/slack/events',
+    JSON.stringify(payload),
+    'application/json',
+    signingSecret,
+  );
+}
+
+/** インタラクティブpayloadはJSONではなく`payload=`のform urlencodedで届く。 */
+export async function signedInteractivityRequest(
+  payload: unknown,
+  signingSecret = 'test-signing-secret',
+): Promise<Request> {
+  return signedSlackPost(
+    '/slack/interactivity',
+    new URLSearchParams({ payload: JSON.stringify(payload) }).toString(),
+    'application/x-www-form-urlencoded',
+    signingSecret,
+  );
 }

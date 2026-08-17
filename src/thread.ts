@@ -46,12 +46,21 @@ export class ThreadAgent extends DurableObject<Env> {
     return reply === undefined ? { history } : { history, reply };
   }
 
+  /**
+   * 会話へ書き足すだけ。Slackのイベントに紐づかない書き込みに使う。
+   * 週次ダイジェストは、投稿した内容をこれでスレッドの文脈にする（ADR 0010）。
+   */
+  append(messages: string[]): void {
+    const at = new Date().toISOString();
+    for (const message of messages) {
+      this.ctx.storage.sql.exec('INSERT INTO turns (message, at) VALUES (?, ?)', message, at);
+    }
+  }
+
   /** 1ターンぶんをまとめて書く。途中で落ちたターンは何も残さない。 */
   save(eventId: string, appended: string[], reply: string): void {
     const at = new Date().toISOString();
-    for (const message of appended) {
-      this.ctx.storage.sql.exec('INSERT INTO turns (message, at) VALUES (?, ?)', message, at);
-    }
+    this.append(appended);
     this.ctx.storage.sql.exec(
       'INSERT INTO handled (event_id, reply, at) VALUES (?, ?, ?)',
       eventId,

@@ -53,6 +53,22 @@
     ]
   },
 
+  // 読書状態（ADR 0010）。GitHubに対する注釈レイヤーで、母集団の正本ではない。
+  // スキーマは `schema.sql` を手で適用する。`wrangler deploy` はmigrationを適用しない。
+  // database_id は単体では権限を持たないIDなので、AI_GATEWAY_IDと同じくここへ置く。
+  "d1_databases": [
+    {
+      "binding": "CLIPS",
+      "database_name": "reading-clipper-clips-db",
+      "database_id": "cc54ac27-e6f9-404c-ad5b-0dd071f12568"
+    }
+  ],
+
+  // 週次ダイジェスト。cronトリガーはUTC指定で、これがJST日曜9時にあたる。
+  "triggers": {
+    "crons": ["0 0 * * 0"]
+  },
+
   // 環境固有値（account ID、gateway URL、各種トークン）はここに書かない。
   // account IDは CLOUDFLARE_ACCOUNT_ID、他は `wrangler secret put` で渡す。
   "vars": {

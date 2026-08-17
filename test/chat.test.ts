@@ -1,10 +1,11 @@
 import type { ModelMessage } from 'ai';
+import { env as testEnv } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runChatTurn } from '../src/chat';
 import { ClipError } from '../src/errors';
 import { resetGitHubTokenCache } from '../src/github';
 import { base64ToUtf8 } from '../src/utils';
-import { generatePrivateKeyPem, jsonResponse, makeEnv, modelResponse } from './helpers';
+import { generatePrivateKeyPem, jsonResponse, makeEnv, modelResponse, resetClips } from './helpers';
 
 const RECEIVED_AT = '2026-08-15T00:00:00.000Z';
 const ARTICLE = '---\ntitle: Worker設計\nauthor: alice\n---\n## 概要\n\nQueueで重い処理を分離する。';
@@ -13,6 +14,7 @@ let privateKeyPem: string;
 
 beforeEach(async () => {
   resetGitHubTokenCache();
+  await resetClips();
   privateKeyPem = await generatePrivateKeyPem();
 });
 
@@ -147,6 +149,14 @@ describe('chat turn', () => {
     expect(String(result.body)).toContain('Queueで重い処理を分離する。');
 
     expect(turn.reply).toContain('要するに重い処理はQueueへ分けなさい');
+
+    // 保存できたクリップは台帳にも入る。入らないと週次ダイジェストに永久に出てこない（ADR 0010）。
+    expect(
+      await testEnv.CLIPS.prepare('SELECT path, url FROM clips').first(),
+    ).toEqual({
+      path: 'clips/qiita.com/Worker設計.md',
+      url: 'https://qiita.com/alice/items/abc',
+    });
 
     // user / assistant(tool call) / tool / assistant(text)
     expect(turn.appended.map((message) => message.role)).toEqual([

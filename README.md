@@ -65,6 +65,7 @@ Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管�
 | Workerコード、Queue bindings、Queue consumer設定、Durable Objects bindings、observability | Git管理された `wrangler.jsonc` とWrangler |
 | Durable Objectのクラスとストレージ | `wrangler.jsonc` の `migrations`（`new_sqlite_classes`）。作成コマンドは不要 |
 | Queue本体とdead letter queue | `wrangler queues create` で作成する |
+| D1データベース本体とスキーマ | `wrangler d1 create` で作成し、[`schema.sql`](schema.sql) を `wrangler d1 execute` で適用する。`wrangler deploy` はmigrationを適用しないため、どちらもローカルからの手動操作にする |
 | AI Gateway | `scripts/setup-ai-gateway.ts`（Cloudflare APIを呼ぶ冪等スクリプト） |
 | runtime secrets | ローカルからWranglerで登録し、Gitには保存しない |
 | Gemini APIキー | AI GatewayのBYOK。Secrets Storeへ登録し、Workerには持たせない |
@@ -157,6 +158,21 @@ pnpm wrangler secret put SLACK_ALLOWED_USER_ID
     3. Build variableを `SKIP_DEPENDENCY_INSTALL=1`、Build commandを `pnpm install --frozen-lockfile`、Deploy commandを `pnpm deploy` にする。**完了**
     4. 非production branchの自動Buildは無効にし、非production branch deploy commandは既定の `npx wrangler versions upload` のままにする。**完了**
 11. CI通過後、production branchへのmergeでWorkers Buildsがデプロイする。**完了**
+12. 未読の週次通知を有効にする（[ADR 0010](docs/adr/0010-weekly-digest-and-dismiss-bit.md)）。
+    1. `pnpm wrangler d1 create reading-clipper-clips-db` を実行し、出力された `database_id` を `wrangler.jsonc` へ書く。**完了**
+    2. `pnpm wrangler d1 execute reading-clipper-clips-db --remote --file=./schema.sql` を実行する。`wrangler dev` 用に `--local` でも同じものを適用する。**完了**
+    3. Slack AppのBot Token Scopesへ `im:write` を追加し、Slack Appを再インストールする。cronハンドラは `conversations.open` でDMのチャンネルIDを引くため、これが無いとダイジェストを投稿できない。**完了**
+    4. Slack AppのInteractivity & Shortcutsを有効化し、Request URLを `https://<Workerの公開ホスト>/slack/interactivity` にする。**完了**
+    5. 既存クリップをD1へ流し込む。**完了**
+
+    ```text
+    gh api "repos/<owner>/<repo>/git/trees/main?recursive=1" \
+      --jq '.tree[] | select(.type == "blob") | .path' \
+      | node --experimental-strip-types scripts/backfill-clips.ts > backfill.sql
+    pnpm wrangler d1 execute reading-clipper-clips-db --remote --file=backfill.sql
+    ```
+
+cronの動作は日曜まで待たずに確認できる。`pnpm wrangler dev --test-scheduled` で起動し、`curl "http://localhost:8787/__scheduled?cron=0+0+*+*+0"` を叩くと `scheduled` ハンドラが走る。
 
 Slackイベント受信、Queue処理、本文取得、GitHub保存、AI要約、Slackへのスレッド返信までを通すE2Eを確認済み。Qiita、Zenn、X、一般Webの4系統それぞれでの取得確認と要約内容の確認は未完了。
 
@@ -211,19 +227,23 @@ GeminiはCloudflare AI GatewayのGoogle AI Studioパススルー経由で呼び�
 
 ## 初期バージョンに含めないもの
 
-- 未読・既読状態の管理
-- 未読記事の定期通知と推薦
+- 未読記事の推薦（未読の週次通知そのものは実装済み。「未読の週次通知」を参照）
 - 保存済み記事の横断検索（同じスレッド内での質問応答は含む）
 - GitHub上のクリップの整理（リネーム、削除）
 - 興味傾向の分析
 
 これらは将来候補として残すが、初期バージョンとは分けて設計する。GitHubを書き換えるツールをAIへ渡すときは、記事本文という第三者の書いた入力がAIの文脈に入っていることを前提に、実行前にSlackで確認を取る導線を必ず設ける。
 
-## 未読・既読管理は別途設計する
+## 未読の週次通知
 
-未読・既読管理には、保存時だけでなく、数週間または数か月後に記事を再発見して状態を変更できる恒久的な操作導線が必要になる。
+初期バージョンの後に追加した（[ADR 0010](docs/adr/0010-weekly-digest-and-dismiss-bit.md)）。
 
-状態の種類、状態の正本、記事の探し方、変更・取り消し・一括操作、Slack以外の操作面の要否を含め、利用場面から別途設計する。それまでは読書状態のデータ設計を行わない。
+- 読書状態は `dismissed_at` の1ビットだけを持つ。「既読／未読」という状態は持たず、UIのラベルも読んだかどうかを主張しない語にする。Dismissを理由別に割らない。
+- 状態の正本はCloudflare D1に置き、1テーブル5列（`path` / `url` / `clipped_at` / `last_shown_at` / `dismissed_at`）とする。定義は [`schema.sql`](schema.sql)。D1はクリップの台帳ではなくGitHubへの注釈レイヤーで、母集団はGit Trees APIから再構成できる。
+- 日曜9時（JST）にSlackのDMへ、未Dismissのクリップをちょうど7件投稿する。並び順は「未提示が最優先、その中では新しい順、既提示は最も長く出していない順」の1本で表す。出した分に `last_shown_at` を打つラウンドロビンで、提示回数は数えない。未Dismissが0件のときも投稿し、cronが落ちたのか片付いているのかを受け手が区別できるようにする。
+- この巡回自体が、数か月後に記事を再発見する恒久的な導線を兼ねる。専用の検索UIや一覧画面は作らない。
+- Dismissの入口は、ダイジェストの行ごとのボタンと、スレッドでの自然文（AIの `set_clip_dismissed` ツール）の2つ。どちらも単体のみを対象とし、一括操作は用意しない。ボタン押下はAIを経由せず直接D1を更新する。
+- GitHubから手で消したクリップとD1の孤児行を突き合わせない。1度だけダイジェストに出るが、ボタンを1回押せば消える。Trees APIを使うのはバックフィルと復旧のときだけにする。
 
 ## 取得内容の扱い
 
@@ -251,6 +271,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [ADR 0007: スレッドの会話履歴をDurable Objectにツール結果ごと持つ](docs/adr/0007-thread-history-in-durable-object.md)
 - [ADR 0008: AI SDKに乗せ、モデルの呼び出しをDurable Objectの外へ出す](docs/adr/0008-ai-sdk-and-model-calls-outside-the-durable-object.md)
 - [ADR 0009: Web検索はGeminiのGoogle検索グラウンディングで行う](docs/adr/0009-google-search-grounding.md)
+- [ADR 0010: 未読の週次通知のため、読書状態を `dismissed_at` の1ビットとしてD1に持つ](docs/adr/0010-weekly-digest-and-dismiss-bit.md)
 
 ## 確認済みの外部仕様
 
