@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchContent } from '../src/fetchers';
+import { fetchContent, fetchOgImage } from '../src/fetchers';
 import { makeEnv } from './helpers';
+
+function htmlResponse(head: string, status = 200): Response {
+  return new Response(`<html><head>${head}</head><body>本文</body></html>`, {
+    status,
+    headers: { 'content-type': 'text/html' },
+  });
+}
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -166,5 +173,62 @@ describe('source fetchers', () => {
       retryable: false,
       status: 404,
     });
+  });
+});
+
+/**
+ * フェッチャーが叩くAPI（Zennの非公式API・Qiitaの`.md`・X API）はどれも画像を返さないため、
+ * og:imageはソースで分岐せず記事ページのHTMLから取る（ADR 0011）。
+ */
+describe('fetchOgImage', () => {
+  it('takes og:image out of the head', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      htmlResponse('<meta property="og:image" content="https://cdn.example.com/a.png">'),
+    );
+
+    expect(await fetchOgImage('https://example.com/a')).toBe('https://cdn.example.com/a.png');
+  });
+
+  it('resolves a relative og:image against the page', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      htmlResponse('<meta property="og:image" content="/img/a.png">'),
+    );
+
+    expect(await fetchOgImage('https://example.com/posts/a')).toBe('https://example.com/img/a.png');
+  });
+
+  it('decodes the entities that HTML attributes carry', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      htmlResponse('<meta property="og:image" content="https://cdn.example.com/a?w=1&amp;h=2">'),
+    );
+
+    expect(await fetchOgImage('https://example.com/a')).toBe('https://cdn.example.com/a?w=1&h=2');
+  });
+
+  it('returns nothing when the page has no og:image', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(htmlResponse('<title>題名</title>'));
+
+    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
+  });
+
+  // サムネイルが無くてもクリップの保存は成立する。ここで投げると保存ごと道連れになる。
+  it('returns nothing instead of throwing when the page is gone', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(htmlResponse('', 404));
+
+    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
+  });
+
+  it('returns nothing instead of throwing when the request fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connection refused'));
+
+    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
+  });
+
+  it('ignores an og:image that is not something Slack can fetch', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      htmlResponse('<meta property="og:image" content="data:image/png;base64,AAAA">'),
+    );
+
+    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
   });
 });

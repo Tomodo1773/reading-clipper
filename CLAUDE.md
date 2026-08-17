@@ -29,6 +29,8 @@ package managerはpnpmで、versionは `package.json` の `packageManager` で�
 
 D1のスキーマは `wrangler deploy` では適用されません。`schema.sql` を変更したら `--remote` と `--local` の両方へ手で流してください。`pnpm test` は `schema.sql` をそのまま読んでテーブルを作るため、事前準備は要りません。
 
+`schema.sql` は `CREATE TABLE IF NOT EXISTS` の1文だけで構成します。テストが全体を1文として `prepare().run()` へ流すため、2文目を書くとテストが壊れます。既存のテーブルへ列を足すときは、`CREATE TABLE` の定義に列を書いたうえで、`ALTER TABLE` を `--command` で別途手で流してください。
+
 `pnpm typecheck` は `wrangler types` で `worker-configuration.d.ts` を生成してから、スクリプト用（`tsconfig.json`）とWorker用（`src/tsconfig.json`）の2つを検査します。Workersのグローバル型とNodeの型は `fetch` などの定義が衝突するため、意図的に分けています。
 
 `pnpm setup:aigw` には `CLOUDFLARE_ACCOUNT_ID` と、`AI Gateway Read` / `AI Gateway Write` 権限を持つ `CLOUDFLARE_API_TOKEN` が必要です。

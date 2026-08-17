@@ -9,8 +9,22 @@ const OTHER_PATH = 'clips/zenn.dev/別の記事.md';
 
 /** 投稿されたダイジェストのblocks。押した時点のSlackのpayloadに丸ごと入ってくる。 */
 const POSTED_BLOCKS = digestBlocks(makeEnv(), [
-  { path: CLIP_PATH, url: 'https://qiita.com/a/items/1' },
-  { path: OTHER_PATH, url: 'https://zenn.dev/a/articles/b' },
+  {
+    path: CLIP_PATH,
+    url: 'https://qiita.com/a/items/1',
+    title: '記事',
+    excerpt: '抜粋',
+    imageUrl: 'https://img.example.com/1.png',
+    clippedAt: '2026-02-03T00:00:00.000Z',
+  },
+  {
+    path: OTHER_PATH,
+    url: 'https://zenn.dev/a/articles/b',
+    title: '別の記事',
+    excerpt: '別の抜粋',
+    imageUrl: null,
+    clippedAt: '2026-02-03T00:00:00.000Z',
+  },
 ]);
 
 function buttonPress(path = CLIP_PATH, overrides: Record<string, unknown> = {}) {
@@ -90,10 +104,12 @@ describe('POST /slack/interactivity', () => {
     const update = updates[0] as { channel: string; ts: string; blocks: unknown[] };
     expect(update.channel).toBe('D123');
     expect(update.ts).toBe('1700000000.000100');
-    // 見出しと、残った1行。
-    expect(update.blocks).toHaveLength(2);
+    // 見出しと区切り、残った1件ぶんの3ブロック。
+    expect(update.blocks).toHaveLength(5);
     expect(JSON.stringify(update.blocks)).not.toContain(CLIP_PATH);
     expect(JSON.stringify(update.blocks)).toContain(OTHER_PATH);
+    // 差し替えでもサムネイルを取り直さない。payloadのblocksをそのまま使う。
+    expect(JSON.stringify(update.blocks)).toContain('別の抜粋');
   });
 
   it('does not bring back a row that an earlier press already dismissed', async () => {
@@ -106,7 +122,7 @@ describe('POST /slack/interactivity', () => {
     await press(OTHER_PATH);
 
     const last = updates.at(-1) as { blocks: unknown[] };
-    expect(last.blocks).toHaveLength(1);
+    expect(last.blocks).toHaveLength(2);
     expect(JSON.stringify(last.blocks)).not.toContain(CLIP_PATH);
     expect(JSON.stringify(last.blocks)).not.toContain(OTHER_PATH);
   });

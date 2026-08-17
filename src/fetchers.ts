@@ -531,6 +531,75 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedContent> {
   });
 }
 
+/** `<head>`はこの範囲に収まる。全文を読むと記事によっては数MBになる。 */
+const OG_IMAGE_SCAN_BYTES = 256 * 1024;
+
+/** 既定のUser-Agentだとmetaを返さないサイトがあるため、素性を書いたものを送る。 */
+const OG_IMAGE_USER_AGENT = 'Mozilla/5.0 (compatible; reading-clipper/1.0)';
+
+/** `</head>`まで、または上限まで読んで打ち切る。本文は要らない。 */
+async function readHead(response: Response, limit: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let html = '';
+  let read = 0;
+  try {
+    while (read < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      read += value.byteLength;
+      html += decoder.decode(value, { stream: true });
+      if (/<\/head\s*>/i.test(html)) break;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return html;
+}
+
+function findOgImage(html: string): string | undefined {
+  for (const tag of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const attrs = parseAttributes(tag[0].slice('<meta'.length, -1));
+    const key = (attrs.property ?? attrs.name ?? '').toLowerCase();
+    if (key !== 'og:image' && key !== 'og:image:url' && key !== 'og:image:secure_url') continue;
+    const content = attrs.content?.trim();
+    if (content) return content;
+  }
+  return undefined;
+}
+
+/**
+ * 記事ページの`og:image`を取る（ADR 0011）。
+ *
+ * フェッチャーが叩くAPI（Zennの非公式API・Qiitaの`.md`・X API）はどれも画像を返さないため、
+ * ソースで分岐せず記事ページのHTMLから一律に取る。
+ * サムネイルが無くてもクリップの保存は成立するので、**失敗はすべて`undefined`にして投げない**。
+ */
+export async function fetchOgImage(pageUrl: string): Promise<string | undefined> {
+  try {
+    const response = await fetchWithTimeout(
+      pageUrl,
+      { headers: { accept: 'text/html', 'user-agent': OG_IMAGE_USER_AGENT } },
+      15_000,
+      'fetch',
+    );
+    if (!response.ok) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const found = findOgImage(await readHead(response, OG_IMAGE_SCAN_BYTES));
+    if (!found) return undefined;
+    // 相対パスで書くサイトがある。Slackへ渡せるのは絶対URLだけ。
+    const resolved = new URL(found, response.url || pageUrl);
+    return resolved.protocol === 'https:' || resolved.protocol === 'http:'
+      ? resolved.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function fetchContent(rawUrl: string, env: Env): Promise<FetchedContent> {
   const url = canonicalizeUrl(rawUrl);
   switch (classifyUrl(url)) {

@@ -3,7 +3,8 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { recordClip, setClipDismissed } from './clips';
 import { asClipError } from './errors';
-import { fetchContent } from './fetchers';
+import { clipExcerpt } from './excerpt';
+import { fetchContent, fetchOgImage } from './fetchers';
 import { getGitHubFile, putGitHubFile } from './github';
 import { renderClipMarkdown } from './markdown';
 import type { Env } from './types';
@@ -16,7 +17,13 @@ import { buildClipPath, canonicalizeUrl } from './url';
 async function saveClip(env: Env, rawUrl: string, receivedAt: string) {
   const canonicalUrl = canonicalizeUrl(rawUrl).toString();
   // 保存先は記事タイトルから決めるため、取得を先に行う。
-  const content = await fetchContent(canonicalUrl, env);
+  // og:imageは本文の取得と関係が無いので、待ち時間を足さないよう並列に走らせる。
+  // `fetchOgImage`は失敗しても投げないため、サムネイルの不在が保存を巻き添えにしない。
+  const [fetched, imageUrl] = await Promise.all([
+    fetchContent(canonicalUrl, env),
+    fetchOgImage(canonicalUrl),
+  ]);
+  const content = { ...fetched, imageUrl };
   const path = buildClipPath(canonicalUrl, content.title);
   // 既存ファイルの更新にはshaが要る。同じタイトルの記事は上書きする。
   const existing = await getGitHubFile(env, path);
@@ -24,7 +31,14 @@ async function saveClip(env: Env, rawUrl: string, receivedAt: string) {
   // D1は台帳ではなく注釈レイヤーなので、書けなくても保存は成立させる（ADR 0010）。
   // ただしこの行が入らないと、そのクリップはダイジェストに永久に出てこない。
   try {
-    await recordClip(env, path, canonicalUrl, receivedAt);
+    await recordClip(env, {
+      path,
+      url: canonicalUrl,
+      title: content.title,
+      excerpt: clipExcerpt(content.markdown),
+      imageUrl,
+      clippedAt: receivedAt,
+    });
   } catch (error) {
     const clipError = asClipError(error, 'clips');
     console.warn(JSON.stringify({ stage: clipError.stage, message: clipError.message, path }));

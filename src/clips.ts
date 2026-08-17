@@ -5,8 +5,23 @@ const DIGEST_SIZE = 7;
 
 export interface DigestClip {
   path: string;
-  /** バックフィルで入れた行はNULL。この場合はGitHubのファイルへリンクする。 */
+  /** 記事のcanonical URL。NULLの行はGitHubのファイルへリンクする。 */
   url: string | null;
+  /** 記事タイトル。NULLならパス末尾から導出する（ADR 0011）。 */
+  title: string | null;
+  excerpt: string | null;
+  imageUrl: string | null;
+  clippedAt: string;
+}
+
+/** 保存時に台帳へ書く値。表示に使うものはここで複製する（ADR 0011）。 */
+export interface ClipRecord {
+  path: string;
+  url: string;
+  title: string;
+  excerpt: string;
+  imageUrl?: string;
+  clippedAt: string;
 }
 
 /**
@@ -14,18 +29,21 @@ export interface DigestClip {
  *
  * 同じ記事を保存し直しても`last_shown_at`と`dismissed_at`は残す。
  * `INSERT OR REPLACE`は行ごと置き換えるため、片付けた印が黙って消える。
+ *
+ * 表示に使う列は取り直した値で上書きする。ここに足し忘れると、記事が更新されても
+ * 古いタイトルや抜粋がダイジェストに出続ける。`clipped_at`だけは最初の保存時のままにする。
  */
-export async function recordClip(
-  env: Env,
-  path: string,
-  url: string,
-  clippedAt: string,
-): Promise<void> {
+export async function recordClip(env: Env, clip: ClipRecord): Promise<void> {
   await env.CLIPS.prepare(
-    `INSERT INTO clips (path, url, clipped_at) VALUES (?, ?, ?)
-       ON CONFLICT(path) DO UPDATE SET url = excluded.url`,
+    `INSERT INTO clips (path, url, title, excerpt, image_url, clipped_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         url = excluded.url,
+         title = excluded.title,
+         excerpt = excluded.excerpt,
+         image_url = excluded.image_url`,
   )
-    .bind(path, url, clippedAt)
+    .bind(clip.path, clip.url, clip.title, clip.excerpt, clip.imageUrl ?? null, clip.clippedAt)
     .run();
 }
 
@@ -42,7 +60,8 @@ function placeholders(count: number): string {
  */
 export async function selectDigestClips(env: Env): Promise<DigestClip[]> {
   const { results } = await env.CLIPS.prepare(
-    `SELECT path, url FROM clips
+    `SELECT path, url, title, excerpt, image_url AS imageUrl, clipped_at AS clippedAt
+       FROM clips
       WHERE dismissed_at IS NULL
       ORDER BY last_shown_at ASC, clipped_at DESC
       LIMIT ?`,

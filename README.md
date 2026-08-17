@@ -164,13 +164,27 @@ pnpm wrangler secret put SLACK_ALLOWED_USER_ID
     3. Slack AppのBot Token Scopesへ `im:write` を追加し、Slack Appを再インストールする。cronハンドラは `conversations.open` でDMのチャンネルIDを引くため、これが無いとダイジェストを投稿できない。**完了**
     4. Slack AppのInteractivity & Shortcutsを有効化し、Request URLを `https://<Workerの公開ホスト>/slack/interactivity` にする。**完了**
     5. 既存クリップをD1へ流し込む。**完了**
+13. ダイジェストの表示を抜粋とサムネイル付きにする（[ADR 0011](docs/adr/0011-digest-rows-with-excerpt-and-thumbnail.md)）。
+    1. 既存のD1へ列を3つ足す。`schema.sql` は `CREATE TABLE IF NOT EXISTS` なので既存テーブルには効かない。`--remote` と `--local` の両方へ流す。
 
     ```text
-    gh api "repos/<owner>/<repo>/git/trees/main?recursive=1" \
-      --jq '.tree[] | select(.type == "blob") | .path' \
-      | node --experimental-strip-types scripts/backfill-clips.ts > backfill.sql
+    pnpm wrangler d1 execute reading-clipper-clips-db --remote \
+      --command "ALTER TABLE clips ADD COLUMN title TEXT;"
+    pnpm wrangler d1 execute reading-clipper-clips-db --remote \
+      --command "ALTER TABLE clips ADD COLUMN excerpt TEXT;"
+    pnpm wrangler d1 execute reading-clipper-clips-db --remote \
+      --command "ALTER TABLE clips ADD COLUMN image_url TEXT;"
+    ```
+
+    2. バックフィルを流し直し、`url` / `title` / `excerpt` / `image_url` と本物の `clipped_at` を既存の行へ埋める。
+
+    ```text
+    git clone --depth 1 https://github.com/<owner>/<repo>.git /tmp/clips
+    node --experimental-strip-types scripts/backfill-clips.ts /tmp/clips > backfill.sql
     pnpm wrangler d1 execute reading-clipper-clips-db --remote --file=backfill.sql
     ```
+
+バックフィルはcloneしたリポジトリのフロントマターを読む。GitHubへのリクエストはcloneの1回だけで、`image_url` の無い記事についてのみ `og:image` を取りに行く。既にある行の `dismissed_at` と `last_shown_at` には触れない。D1を失ったときの復旧もこれと同じ操作で行う。
 
 cronの動作は日曜まで待たずに確認できる。`pnpm wrangler dev` で起動し、`curl "http://localhost:8787/cdn-cgi/handler/scheduled"` を叩くと `scheduled` ハンドラが走る。
 
@@ -241,11 +255,13 @@ GeminiはCloudflare AI GatewayのGoogle AI Studioパススルー経由で呼び�
 初期バージョンの後に追加した（[ADR 0010](docs/adr/0010-weekly-digest-and-dismiss-bit.md)）。
 
 - 読書状態は `dismissed_at` の1ビットだけを持つ。「既読／未読」という状態は持たず、UIのラベルも読んだかどうかを主張しない語にする。Dismissを理由別に割らない。
-- 状態の正本はCloudflare D1に置き、1テーブル5列（`path` / `url` / `clipped_at` / `last_shown_at` / `dismissed_at`）とする。定義は [`schema.sql`](schema.sql)。D1はクリップの台帳ではなくGitHubへの注釈レイヤーで、母集団はGit Trees APIから再構成できる。
+- 状態の正本はCloudflare D1に置き、1テーブル8列（`path` / `url` / `title` / `excerpt` / `image_url` / `clipped_at` / `last_shown_at` / `dismissed_at`）とする。定義は [`schema.sql`](schema.sql)。D1はクリップの台帳ではなくGitHubへの注釈レイヤーで、母集団もこれらの値もGitHubのクリップから再構成できる。
 - 日曜9時（JST）にSlackのDMへ、未Dismissのクリップをちょうど7件投稿する。並び順は「未提示が最優先、その中では新しい順、既提示は最も長く出していない順」の1本で表す。出した分に `last_shown_at` を打つラウンドロビンで、提示回数は数えない。未Dismissが0件のときも投稿し、cronが落ちたのか片付いているのかを受け手が区別できるようにする。
 - この巡回自体が、数か月後に記事を再発見する恒久的な導線を兼ねる。専用の検索UIや一覧画面は作らない。
 - Dismissの入口は、ダイジェストの行ごとのボタンと、スレッドでの自然文（AIの `set_clip_dismissed` ツール）の2つ。どちらも単体のみを対象とし、一括操作は用意しない。ボタン押下はAIを経由せず直接D1を更新する。
-- GitHubから手で消したクリップとD1の孤児行を突き合わせない。1度だけダイジェストに出るが、ボタンを1回押せば消える。Trees APIを使うのはバックフィルと復旧のときだけにする。
+- GitHubから手で消したクリップとD1の孤児行を突き合わせない。1度だけダイジェストに出るが、ボタンを1回押せば消える。GitHubを読むのはバックフィルと復旧のときだけにする。
+- 1件は section（タイトルのリンクと抜粋、`accessory` にサムネイル）+ actions（片付けるボタン）+ context（ホスト名・保存時期）の3ブロックで出す（[ADR 0011](docs/adr/0011-digest-rows-with-excerpt-and-thumbnail.md)）。表示に使う値は保存時にD1へ複製し、ダイジェスト生成時にGitHubや記事サイトを読まなくても組み立てられるようにする。
+- サムネイルの `og:image` だけは、投稿前に到達性を確かめる。Slackは取得できない `image_url` を渡すとメッセージ全体を拒否するため、渡す前にこちらで落とす。取れなかった行は画像なしで出し、ダイジェストの投稿自体は必ず行う。
 
 ## 取得内容の扱い
 
@@ -274,6 +290,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [ADR 0008: AI SDKに乗せ、モデルの呼び出しをDurable Objectの外へ出す](docs/adr/0008-ai-sdk-and-model-calls-outside-the-durable-object.md)
 - [ADR 0009: Web検索はGeminiのGoogle検索グラウンディングで行う](docs/adr/0009-google-search-grounding.md)
 - [ADR 0010: 未読の週次通知のため、読書状態を `dismissed_at` の1ビットとしてD1に持つ](docs/adr/0010-weekly-digest-and-dismiss-bit.md)
+- [ADR 0011: 週次ダイジェストの1件を、抜粋とサムネイル付きの3ブロックで表す](docs/adr/0011-digest-rows-with-excerpt-and-thumbnail.md)
 
 ## 確認済みの外部仕様
 

@@ -23,6 +23,8 @@ export interface FetchedContent {
   title: string;
   author?: string;
   publishedAt?: string;
+  /** 記事ページのog:image。ダイジェストのサムネイルに使う（ADR 0011）。 */
+  imageUrl?: string;
   markdown: string;
   complete: boolean;
 }
