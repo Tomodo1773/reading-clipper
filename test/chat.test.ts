@@ -24,6 +24,8 @@ interface Recorded {
   modelBodies: Record<string, unknown>[];
   savedPath: string;
   savedMarkdown: string;
+  /** 本文の取得が何回走ったか。ロードと保存で二重に取っていないことを見る。 */
+  articleFetches: number;
 }
 
 /**
@@ -31,7 +33,12 @@ interface Recorded {
  * 記事の取得とGitHubは実物のコードを通す。
  */
 function mockWorld(modelReplies: Response[]): Recorded {
-  const recorded: Recorded = { modelBodies: [], savedPath: '', savedMarkdown: '' };
+  const recorded: Recorded = {
+    modelBodies: [],
+    savedPath: '',
+    savedMarkdown: '',
+    articleFetches: 0,
+  };
   let modelCall = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
@@ -39,7 +46,15 @@ function mockWorld(modelReplies: Response[]): Recorded {
     if (url.includes('/app/installations/') && method === 'POST') {
       return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
     }
+    // load_contentはリダイレクト解決とog:imageのために、記事ページ本体も1回GETする。
+    if (url === 'https://qiita.com/alice/items/abc') {
+      return new Response('<html><head><title>Worker設計</title></head><body></body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    }
     if (url === 'https://qiita.com/alice/items/abc.md') {
+      recorded.articleFetches += 1;
       return new Response(ARTICLE, { status: 200 });
     }
     if (url.includes(':generateContent')) {
@@ -65,26 +80,32 @@ function mockWorld(modelReplies: Response[]): Recorded {
   return recorded;
 }
 
-/** ツール結果のメッセージから、save_clipが返した値そのものを取り出す。 */
-function toolOutput(messages: ModelMessage[]): Record<string, unknown> {
-  const toolMessage = messages.find((message) => message.role === 'tool');
-  const parts = toolMessage?.content as
-    | Array<{ output: { value: Record<string, unknown> } }>
-    | undefined;
-  const first = parts?.[0];
-  if (!first) throw new Error('tool result was not appended to the conversation');
-  return first.output.value;
+/** 名前で指定したツールが返した値そのものを取り出す。1ターンにツール結果は複数出る。 */
+function toolOutput(messages: ModelMessage[], toolName: string): Record<string, unknown> {
+  for (const message of messages) {
+    if (message.role !== 'tool') continue;
+    const parts = message.content as Array<{
+      toolName: string;
+      output: { value: Record<string, unknown> };
+    }>;
+    const found = parts.find((part) => part.toolName === toolName);
+    if (found) return found.output.value;
+  }
+  throw new Error(`${toolName} result was not appended to the conversation`);
 }
 
 /** Gemini 3系はfunctionCallにthoughtSignatureを添えて返す。 */
-function toolCallReply(url: string): Response {
+function toolCallReply(name: string, url: string): Response {
   return modelResponse([
     {
-      functionCall: { name: 'save_clip', args: { url } },
+      functionCall: { name, args: { url } },
       thoughtSignature: 'sig-abc',
     },
   ]);
 }
+
+const loadCallReply = (url: string): Response => toolCallReply('load_content', url);
+const saveCallReply = (url: string): Response => toolCallReply('save_loaded', url);
 
 /** Geminiがサーバー側で検索を実行したときの応答。1回のgenerateContentに全部入る。 */
 function groundedReply(text: string): Response {
@@ -120,9 +141,10 @@ function groundedReply(text: string): Response {
 }
 
 describe('chat turn', () => {
-  it('saves through the tool and answers from the body it returned', async () => {
+  it('loads first, saves what it loaded, and answers from that body', async () => {
     const recorded = mockWorld([
-      toolCallReply('https://qiita.com/alice/items/abc'),
+      loadCallReply('https://qiita.com/alice/items/abc'),
+      saveCallReply('https://qiita.com/alice/items/abc'),
       modelResponse([
         {
           text: 'Workerの非同期処理の話ね。要するに重い処理はQueueへ分けなさい、ってことよ。<https://github.com/example/clips/blob/main/clip.md|GitHub>には置いておいたわ。',
@@ -142,11 +164,19 @@ describe('chat turn', () => {
     expect(recorded.savedMarkdown).toContain('## 概要\n\nQueueで重い処理を分離する。');
     expect(recorded.savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい');
 
-    // ツール結果には保存の事実と本文がそのまま入る。切り詰めない。
-    const result = toolOutput(turn.appended);
-    expect(result.saved).toBe(true);
-    expect(result.github_url).toBe('https://github.com/example/clips/blob/main/clip.md');
-    expect(String(result.body)).toContain('Queueで重い処理を分離する。');
+    // 本文が会話に現れるのはロードの1回だけ。保存の結果には入れない（ADR 0012）。
+    const load = toolOutput(turn.appended, 'load_content');
+    expect(load.loaded).toBe(true);
+    expect(load.url).toBe('https://qiita.com/alice/items/abc');
+    expect(String(load.body)).toContain('Queueで重い処理を分離する。');
+
+    const save = toolOutput(turn.appended, 'save_loaded');
+    expect(save.saved).toBe(true);
+    expect(save.github_url).toBe('https://github.com/example/clips/blob/main/clip.md');
+    expect(save.body).toBeUndefined();
+
+    // ロードと保存で二重に取らない。保存はロード済みの本文をそのまま書く。
+    expect(recorded.articleFetches).toBe(1);
 
     expect(turn.reply).toContain('要するに重い処理はQueueへ分けなさい');
 
@@ -158,18 +188,116 @@ describe('chat turn', () => {
       url: 'https://qiita.com/alice/items/abc',
     });
 
-    // user / assistant(tool call) / tool / assistant(text)
+    // user / assistant(load) / tool / assistant(save) / tool / assistant(text)
     expect(turn.appended.map((message) => message.role)).toEqual([
       'user',
+      'assistant',
+      'tool',
       'assistant',
       'tool',
       'assistant',
     ]);
   });
 
+  /**
+   * 順序を実際に止めているのはここだけ。名前と説明文は働きかけでしかない（ADR 0012）。
+   * モデルが組み立てた実在しないURLも、読んでいない以上ここで止まる。
+   */
+  it('refuses to save a URL that was not loaded in this turn', async () => {
+    const recorded = mockWorld([
+      saveCallReply('https://qiita.com/alice/items/abc'),
+      modelResponse([{ text: '先に中身を読んでくるわね。' }]),
+    ]);
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'https://qiita.com/alice/items/abc',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(toolOutput(turn.appended, 'save_loaded')).toEqual({
+      saved: false,
+      not_loaded: 'https://qiita.com/alice/items/abc',
+    });
+    // 取得も保存も走らない。拒否だけして返す。
+    expect(recorded.articleFetches).toBe(0);
+    expect(recorded.savedPath).toBe('');
+    expect(await testEnv.CLIPS.prepare('SELECT COUNT(*) AS n FROM clips').first()).toEqual({ n: 0 });
+  });
+
+  /**
+   * スマホのGoogleアプリから共有すると`share.google/{id}`が届く。実体は記事本体で、
+   * リダイレクトの着いた先で種類を判定するのでZenn専用の取り方が選ばれる（ADR 0012）。
+   */
+  it('saves the article the redirects landed on, not the URL that was sent', async () => {
+    const recorded: { savedPath: string } = { savedPath: '' };
+    let modelCall = 0;
+    const modelReplies = [
+      loadCallReply('https://share.google/tQD'),
+      // AIはロードが返した着いた先のURLを渡す。
+      saveCallReply('https://zenn.dev/alice/articles/abc123def456'),
+      modelResponse([{ text: 'Zennの記事だったわよ。' }]),
+    ];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes(':generateContent')) {
+        const reply = modelReplies[modelCall];
+        modelCall += 1;
+        if (!reply) throw new Error(`unexpected model call #${modelCall}`);
+        return reply;
+      }
+      if (url === 'https://share.google/tQD') {
+        const response = new Response('<html><head></head><body></body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+        Object.defineProperty(response, 'url', {
+          value: 'https://zenn.dev/alice/articles/abc123def456',
+        });
+        return response;
+      }
+      if (url.startsWith('https://zenn.dev/api/articles/')) {
+        return jsonResponse({ article: { title: 'Zennの記事', body_html: '<p>本文</p>' } });
+      }
+      if (url.includes('/app/installations/')) {
+        return jsonResponse({ token: 't', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      if (url.includes('/repos/example/clips/contents/') && method === 'GET') {
+        return jsonResponse({ message: 'Not Found' }, 404);
+      }
+      if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
+        recorded.savedPath = decodeURIComponent(url.split('/contents/')[1] ?? '');
+        return jsonResponse({ content: { sha: 's', html_url: 'https://github.com/x' } }, 201);
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    });
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'https://share.google/tQD',
+      receivedAt: RECEIVED_AT,
+    });
+
+    // 中継URLだったことはAIにも伝わる。
+    expect(toolOutput(turn.appended, 'load_content')).toMatchObject({
+      url: 'https://zenn.dev/alice/articles/abc123def456',
+      requested_url: 'https://share.google/tQD',
+      source: 'zenn',
+    });
+    // clips/share.google/ には作られない。
+    expect(recorded.savedPath).toBe('clips/zenn.dev/Zennの記事.md');
+    expect(await testEnv.CLIPS.prepare('SELECT url FROM clips').first()).toEqual({
+      url: 'https://zenn.dev/alice/articles/abc123def456',
+    });
+  });
+
   it('keeps the thought signature in history and sends it back on the next turn', async () => {
     mockWorld([
-      toolCallReply('https://qiita.com/alice/items/abc'),
+      loadCallReply('https://qiita.com/alice/items/abc'),
+      saveCallReply('https://qiita.com/alice/items/abc'),
       modelResponse([{ text: '保存しておいたわ。' }]),
     ]);
 
@@ -211,7 +339,7 @@ describe('chat turn', () => {
           {
             type: 'tool-call',
             toolCallId: 'call_1',
-            toolName: 'save_clip',
+            toolName: 'load_content',
             input: { url: 'https://qiita.com/alice/items/abc' },
           },
         ],
@@ -222,8 +350,8 @@ describe('chat turn', () => {
           {
             type: 'tool-result',
             toolCallId: 'call_1',
-            toolName: 'save_clip',
-            output: { type: 'json', value: { saved: true, title: 'Worker設計', body: ARTICLE } },
+            toolName: 'load_content',
+            output: { type: 'json', value: { loaded: true, title: 'Worker設計', body: ARTICLE } },
           },
         ],
       },
@@ -263,8 +391,8 @@ describe('chat turn', () => {
     expect(turn.appended.map((message) => message.role)).toEqual(['user', 'assistant']);
   });
 
-  it('sends google_search and save_clip together with VALIDATED tool config', async () => {
-    // Gemini 3世代でしか併用は成立しない。AI_MODELを2.x系へ落とすとsave_clipが黙って消えるため、
+  it('sends google_search and the clipping tools together with VALIDATED tool config', async () => {
+    // Gemini 3世代でしか併用は成立しない。AI_MODELを2.x系へ落とすと保存のツールが黙って消えるため、
     // 実行時チェックの代わりにここで検出する。
     const recorded = mockWorld([modelResponse([{ text: 'そうね。' }])]);
 
@@ -283,8 +411,8 @@ describe('chat turn', () => {
     const functionTools = body.tools?.find((entry) => 'functionDeclarations' in entry) as
       | { functionDeclarations: Array<{ name: string }> }
       | undefined;
-    expect(functionTools?.functionDeclarations.map((declaration) => declaration.name)).toContain(
-      'save_clip',
+    expect(functionTools?.functionDeclarations.map((declaration) => declaration.name)).toEqual(
+      expect.arrayContaining(['load_content', 'save_loaded']),
     );
     expect(body.toolConfig?.functionCallingConfig?.mode).toBe('VALIDATED');
   });
@@ -380,9 +508,10 @@ describe('chat turn', () => {
         const hasToolResult = JSON.stringify(body).includes('functionResponse');
         return hasToolResult
           ? modelResponse([{ text: '中身が取れなかったわ。今回は何も残していないわよ。' }])
-          : toolCallReply('https://qiita.com/alice/items/gone');
+          : loadCallReply('https://qiita.com/alice/items/gone');
       }
-      if (url === 'https://qiita.com/alice/items/gone.md') return jsonResponse({}, 404);
+      // 記事ページも`.md`も404。リダイレクト解決は投げないので、本文の取得で落ちる。
+      if (url.startsWith('https://qiita.com/alice/items/gone')) return jsonResponse({}, 404);
       if (method === 'PUT') {
         putCalled = true;
         return jsonResponse({}, 201);
@@ -400,7 +529,7 @@ describe('chat turn', () => {
       receivedAt: RECEIVED_AT,
     });
 
-    expect(toolOutput(turn.appended)).toEqual({ saved: false, failed_at: 'fetch' });
+    expect(toolOutput(turn.appended, 'load_content')).toEqual({ loaded: false, failed_at: 'fetch' });
     expect(putCalled).toBe(false);
     expect(turn.reply).toContain('何も残していない');
   });

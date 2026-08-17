@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchContent, fetchOgImage } from '../src/fetchers';
+import { fetchContent, fetchPageHead, loadContent } from '../src/fetchers';
 import { makeEnv } from './helpers';
 
-function htmlResponse(head: string, status = 200): Response {
-  return new Response(`<html><head>${head}</head><body>本文</body></html>`, {
+/**
+ * `landedAt`を渡すと、リダイレクトを追った後の応答になる。
+ * `new Response()`の`url`は常に空文字なので、実物と同じように見せるには差し込むしかない。
+ */
+function htmlResponse(head: string, status = 200, landedAt?: string): Response {
+  const response = new Response(`<html><head>${head}</head><body>本文</body></html>`, {
     status,
     headers: { 'content-type': 'text/html' },
   });
+  if (landedAt) Object.defineProperty(response, 'url', { value: landedAt });
+  return response;
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -179,22 +185,38 @@ describe('source fetchers', () => {
 /**
  * フェッチャーが叩くAPI（Zennの非公式API・Qiitaの`.md`・X API）はどれも画像を返さないため、
  * og:imageはソースで分岐せず記事ページのHTMLから取る（ADR 0011）。
+ * このGETはリダイレクトの解決も兼ねる（ADR 0012）。
  */
-describe('fetchOgImage', () => {
+describe('fetchPageHead', () => {
   it('takes og:image out of the head', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       htmlResponse('<meta property="og:image" content="https://cdn.example.com/a.png">'),
     );
 
-    expect(await fetchOgImage('https://example.com/a')).toBe('https://cdn.example.com/a.png');
+    expect(await fetchPageHead('https://example.com/a')).toEqual({
+      resolvedUrl: 'https://example.com/a',
+      imageUrl: 'https://cdn.example.com/a.png',
+    });
   });
 
-  it('resolves a relative og:image against the page', async () => {
+  it('reports where the redirects landed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      htmlResponse('<meta property="og:image" content="/img/a.png">'),
+      htmlResponse('<title>題名</title>', 200, 'https://zenn.dev/alice/articles/abc123def456'),
     );
 
-    expect(await fetchOgImage('https://example.com/posts/a')).toBe('https://example.com/img/a.png');
+    expect(await fetchPageHead('https://share.google/tQD')).toMatchObject({
+      resolvedUrl: 'https://zenn.dev/alice/articles/abc123def456',
+    });
+  });
+
+  it('resolves a relative og:image against the page it landed on', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      htmlResponse('<meta property="og:image" content="/img/a.png">', 200, 'https://landed.example.com/posts/a'),
+    );
+
+    expect(await fetchPageHead('https://example.com/posts/a')).toMatchObject({
+      imageUrl: 'https://landed.example.com/img/a.png',
+    });
   });
 
   it('decodes the entities that HTML attributes carry', async () => {
@@ -202,26 +224,31 @@ describe('fetchOgImage', () => {
       htmlResponse('<meta property="og:image" content="https://cdn.example.com/a?w=1&amp;h=2">'),
     );
 
-    expect(await fetchOgImage('https://example.com/a')).toBe('https://cdn.example.com/a?w=1&h=2');
+    expect((await fetchPageHead('https://example.com/a')).imageUrl).toBe(
+      'https://cdn.example.com/a?w=1&h=2',
+    );
   });
 
   it('returns nothing when the page has no og:image', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(htmlResponse('<title>題名</title>'));
 
-    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
+    expect((await fetchPageHead('https://example.com/a')).imageUrl).toBeUndefined();
   });
 
   // サムネイルが無くてもクリップの保存は成立する。ここで投げると保存ごと道連れになる。
   it('returns nothing instead of throwing when the page is gone', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(htmlResponse('', 404));
 
-    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
+    expect((await fetchPageHead('https://example.com/a')).imageUrl).toBeUndefined();
   });
 
-  it('returns nothing instead of throwing when the request fails', async () => {
+  // 記事ページのGETを拒否されても、着いた先が分からないまま入力URLで続行できればよい。
+  it('falls back to the requested URL instead of throwing when the request fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connection refused'));
 
-    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
+    expect(await fetchPageHead('https://example.com/a')).toEqual({
+      resolvedUrl: 'https://example.com/a',
+    });
   });
 
   it('ignores an og:image that is not something Slack can fetch', async () => {
@@ -229,6 +256,54 @@ describe('fetchOgImage', () => {
       htmlResponse('<meta property="og:image" content="data:image/png;base64,AAAA">'),
     );
 
-    expect(await fetchOgImage('https://example.com/a')).toBeUndefined();
+    expect((await fetchPageHead('https://example.com/a')).imageUrl).toBeUndefined();
+  });
+});
+
+describe('loadContent', () => {
+  /**
+   * `share.google`は素のHTTPリダイレクト2段で記事本体に着く。着いてから種類を判定するので、
+   * 汎用WebのFirecrawlではなくZenn専用の取り方が選ばれる（ADR 0012）。
+   */
+  it('classifies the page the redirects landed on, not the URL that was sent', async () => {
+    const requested: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      requested.push(url);
+      if (url === 'https://share.google/tQD') {
+        return htmlResponse(
+          '<meta property="og:image" content="https://cdn.example.com/z.png">',
+          200,
+          'https://zenn.dev/alice/articles/abc123def456',
+        );
+      }
+      if (url.startsWith('https://zenn.dev/api/articles/')) {
+        return new Response(
+          JSON.stringify({ article: { title: 'Zennの記事', body_html: '<p>本文</p>' } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    const content = await loadContent('https://share.google/tQD', makeEnv());
+
+    expect(content).toMatchObject({
+      source: 'zenn',
+      canonicalUrl: 'https://zenn.dev/alice/articles/abc123def456',
+      title: 'Zennの記事',
+      imageUrl: 'https://cdn.example.com/z.png',
+    });
+    // Firecrawlは一度も呼ばれない。
+    expect(requested.some((url) => url.includes('firecrawl'))).toBe(false);
+  });
+
+  it('rejects a URL that is not HTTP(S) before making any request', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch');
+
+    await expect(loadContent('ftp://example.com/a', makeEnv())).rejects.toMatchObject({
+      stage: 'validation',
+    });
+    expect(spy).not.toHaveBeenCalled();
   });
 });

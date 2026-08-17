@@ -26,15 +26,19 @@ Slack
 受付Worker ──→ Cloudflare Queue ──→ 処理Worker
   ├→ 受け取った印に 👀                ├→ ThreadAgent (Durable Object) から会話履歴を読む
   └→ 3秒以内にHTTP応答                ├→ AIとのやり取り（google_searchはGemini側で実行）
-                                      │   └→ save_clipツール
-                                      │       （URL別の取得 → Markdown化 → GitHub保存）
+                                      │   ├→ load_contentツール
+                                      │   │   （リダイレクト解決 → URL別の取得 → 全文を返す）
+                                      │   └→ save_loadedツール
+                                      │       （ロード済みの本文 → Markdown化 → GitHub保存）
                                       ├→ ThreadAgent へ1ターンぶんを追記
                                       └→ Slack返信
 ```
 
 受付WorkerはSlackの署名、ワークスペースID、ユーザーIDを検証し、許可されたユーザーのメッセージだけをCloudflare Queueへ登録して3秒以内にHTTP応答する。
 
-届いたメッセージはURLの有無で分岐させず、すべてAIへ渡す。保存はAIが呼ぶ `save_clip` ツールとして実装し、取得・Markdown化・GitHub保存はそのツールの中で行う（[ADR 0006](docs/adr/0006-agent-with-save-tool.md)）。
+届いたメッセージはURLの有無で分岐させず、すべてAIへ渡す。保存はAIが呼ぶツールとして実装する（[ADR 0006](docs/adr/0006-agent-with-save-tool.md)）。
+
+ツールは「読む」`load_content` と「置く」`save_loaded` に分ける。AIはURLを受け取ったらまず `load_content` で読み、読んだ結果を見てから何を保存するかを決める。`save_loaded` はそのターンで読み込んでいないURLを拒否するため、読まずに保存されることはない。リダイレクトの解決は `load_content` が行い、着いた先で取得方法を選ぶ。中身の意味（このポストは記事を紹介しているだけか）による判断はアプリ側では一切行わず、全文を読んだAIに委ねる（[ADR 0012](docs/adr/0012-load-content-then-save-loaded.md)）。
 
 会話の状態はSlackのスレッド単位のDurable Object `ThreadAgent` が持つ。AIへ渡す形のまま、ツール呼び出しとその結果を含めて追記していく。記事本文はツール結果の中に残るため、同じスレッドで掘り下げて質問されても取得し直さない（[ADR 0007](docs/adr/0007-thread-history-in-durable-object.md)）。
 
@@ -207,8 +211,10 @@ Zennには記事URL末尾に `.md` を付ける手段も、Markdown原稿を返�
 
 - Slack AppとのDM（メッセージタブ）へメッセージを送る。返信は元メッセージのスレッドへ返す。
 - メッセージを送ると、処理を始める前にそのメッセージへ 👀 が付く。受け取った印なので、返信が来ても外れない。
-- URLだけを送れば保存して要約が返る。文を添えれば会話になる。URLが含まれていても、感想を聞いているのか保存してほしいのかはAIが判断する。
-- スレッドに続けて質問すると、そのスレッドで保存した記事の内容を踏まえて答える。記事は取得し直さない。
+- URLだけを送れば保存して要約が返る。文を添えれば会話になる。URLが来たら基本は保存する。保存しないのは、読んだ結果が記事ではなかったとき（ログイン画面、同意画面、中身の無い中継ページ）だけで、これはAIが全文を読んだうえで判断する（[ADR 0012](docs/adr/0012-load-content-then-save-loaded.md)）。
+- 中継ページ経由のURL（スマホのGoogleアプリの共有で付く `share.google/...` など）は、リダイレクトの着いた先の記事として保存される。保存先パスも `source_url` も着いた先になる。
+- 記事を紹介しているだけのSNS投稿を送ると、投稿ではなくリンク先の記事が保存される。誰が紹介していたかは返信の中には出るが、クリップには残さない。
+- スレッドに続けて質問すると、そのスレッドで読み込んだ記事の内容を踏まえて答える。記事は取得し直さない。
 - スレッド内の返信は親メッセージに紐づく。別のメッセージから始めれば別の会話になる。
 - 保存した記事と関係のない、最新の事実を聞かれたときはWebを検索して答える。保存済み記事についての質問では検索せず、手元の本文を使う（[ADR 0009](docs/adr/0009-google-search-grounding.md)）。
 - 保存先は `clips/{host}/{記事タイトル}.md` とする。ファイル名は記事タイトルだけから作り、URLハッシュは付けない。日本語はそのまま残し、Windowsで使えない文字・予約デバイス名・255バイトの上限だけを潰す。同一ホスト内でファイル名が衝突した場合は上書きする（[ADR 0005](docs/adr/0005-title-based-file-name-and-plain-body.md)）。
@@ -291,6 +297,7 @@ XはAPIから取得できる公開Postだけを対象とし、protected content�
 - [ADR 0009: Web検索はGeminiのGoogle検索グラウンディングで行う](docs/adr/0009-google-search-grounding.md)
 - [ADR 0010: 未読の週次通知のため、読書状態を `dismissed_at` の1ビットとしてD1に持つ](docs/adr/0010-weekly-digest-and-dismiss-bit.md)
 - [ADR 0011: 週次ダイジェストの1件を、抜粋とサムネイル付きの3ブロックで表す](docs/adr/0011-digest-rows-with-excerpt-and-thumbnail.md)
+- [ADR 0012: 保存するURLを、ロードした内容を見てAIが指す](docs/adr/0012-load-content-then-save-loaded.md)
 
 ## 確認済みの外部仕様
 

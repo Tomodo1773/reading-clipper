@@ -570,13 +570,21 @@ function findOgImage(html: string): string | undefined {
 }
 
 /**
- * 記事ページの`og:image`を取る（ADR 0011）。
+ * 記事ページの`<head>`だけを読んで、**着いた先のURL**と`og:image`を返す（ADR 0011 / ADR 0012）。
  *
- * フェッチャーが叩くAPI（Zennの非公式API・Qiitaの`.md`・X API）はどれも画像を返さないため、
- * ソースで分岐せず記事ページのHTMLから一律に取る。
- * サムネイルが無くてもクリップの保存は成立するので、**失敗はすべて`undefined`にして投げない**。
+ * `og:image`は、フェッチャーが叩くAPI（Zennの非公式API・Qiitaの`.md`・X API）がどれも画像を
+ * 返さないため、ソースで分岐せず記事ページのHTMLから一律に取る。
+ *
+ * `resolvedUrl`は、リダイレクトを追った結果そのもの。`share.google`のような中継ページは、
+ * ここで記事本体のURLに解決される。中継ページの解決にHEADは使えない（中間ホップがHEADには
+ * 200を返して止まり、GETにだけ301を返す実例がある）ため、この部分GETが解決の役目も兼ねる。
+ *
+ * サムネイルが無くても、着いた先が分からなくても、クリップの保存は成立する。
+ * **失敗はすべて握り潰し、`resolvedUrl`は入力のままにして投げない**。
  */
-export async function fetchOgImage(pageUrl: string): Promise<string | undefined> {
+export async function fetchPageHead(
+  pageUrl: string,
+): Promise<{ resolvedUrl: string; imageUrl?: string }> {
   try {
     const response = await fetchWithTimeout(
       pageUrl,
@@ -584,19 +592,21 @@ export async function fetchOgImage(pageUrl: string): Promise<string | undefined>
       15_000,
       'fetch',
     );
+    // `fetch`はリダイレクトを追った後の最終URLを`response.url`に入れる。
+    const resolvedUrl = response.url || pageUrl;
     if (!response.ok) {
       await response.body?.cancel();
-      return undefined;
+      return { resolvedUrl };
     }
     const found = findOgImage(await readHead(response, OG_IMAGE_SCAN_BYTES));
-    if (!found) return undefined;
+    if (!found) return { resolvedUrl };
     // 相対パスで書くサイトがある。Slackへ渡せるのは絶対URLだけ。
-    const resolved = new URL(found, response.url || pageUrl);
-    return resolved.protocol === 'https:' || resolved.protocol === 'http:'
-      ? resolved.toString()
-      : undefined;
+    const image = new URL(found, resolvedUrl);
+    const imageUrl =
+      image.protocol === 'https:' || image.protocol === 'http:' ? image.toString() : undefined;
+    return { resolvedUrl, imageUrl };
   } catch {
-    return undefined;
+    return { resolvedUrl: pageUrl };
   }
 }
 
@@ -612,4 +622,22 @@ export async function fetchContent(rawUrl: string, env: Env): Promise<FetchedCon
     case 'web':
       return fetchWeb(url, env);
   }
+}
+
+/**
+ * 1件ぶんの記事を読み込む。`load_content`ツールの本体（ADR 0012）。
+ *
+ * リダイレクトを追ってから種類を判定するため、`share.google`経由でもZennの記事はZennとして
+ * 取れる。**着いた先を使うのは301が「この資源はここへ移った」というサーバー自身の宣言だから**で、
+ * 本文の意味を読んで行き先を変えているわけではない。中身の意味による判断はAIの側にある。
+ *
+ * 着いた先が確定しないと本文をどこから取るか決まらないので、`fetchPageHead`と本文取得は
+ * 直列になる。増えるのは`<head>`までの部分GET1本だけで、リクエストの本数自体は変わらない。
+ */
+export async function loadContent(rawUrl: string, env: Env): Promise<FetchedContent> {
+  // 不正なURLはここで`validation`として弾く。取得を1本も投げずに済む。
+  const requestedUrl = canonicalizeUrl(rawUrl).toString();
+  const { resolvedUrl, imageUrl } = await fetchPageHead(requestedUrl);
+  const content = await fetchContent(resolvedUrl, env);
+  return { ...content, imageUrl };
 }

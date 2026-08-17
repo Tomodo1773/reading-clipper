@@ -15,6 +15,8 @@
 
 ## 決定
 
+> ツールの構成は [ADR 0012](0012-load-content-then-save-loaded.md) で更新した。`save_clip` は `load_content` と `save_loaded` に分かれ、本文を返す役目は `load_content` へ移っている。以下のうち変わったのはその一点で、入力をURLの有無で分岐しないこと・保存をツールにすること・失敗をツール結果として返すことは変わらない。
+
 - Slackから届いたメッセージは、URLの有無にかかわらずすべてAIへ渡す。受付Worker側でのURL抽出による分岐をやめる。
 - 保存はモデルが呼ぶツール `save_clip(url)` にする。引数はURL1つだけで、保存する本文をモデルに作らせない。
 - `save_clip` の中身は既存の処理をそのまま使う。`canonicalizeUrl` → `fetchContent` → `buildClipPath` → `getGitHubFile` → `renderClipMarkdown` → `putGitHubFile`。
