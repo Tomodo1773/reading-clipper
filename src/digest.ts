@@ -140,12 +140,14 @@ function clipBlocks(env: Env, clip: DigestClip, index: number): DigestBlock[] {
         },
       ],
     },
+    // mrkdwnにするとSlackがホスト名をリンクへ変えて`<http://qiita.com|qiita.com>`になる。
+    // ここに書式は要らないので、自動リンクの効かないplain_textで出す。
     ...(meta
       ? [
           {
             type: 'context' as const,
             block_id: `${id}-meta`,
-            elements: [{ type: 'mrkdwn' as const, text: escapeMrkdwn(meta) }],
+            elements: [{ type: 'plain_text' as const, text: meta }],
           },
         ]
       : []),
@@ -275,7 +277,9 @@ export async function runWeeklyDigest(env: Env, now = new Date()): Promise<void>
     channel,
     text: digestText(shown.length),
     blocks: digestBlocks(env, shown),
-    idempotencyKey: `digest:${at.slice(0, 10)}`,
+    // 冪等キーを渡さない（ADR 0011）。cronは再試行されないので重複排除する対象が無く、
+    // 渡すと投稿されていないのに成功として返り、表示していないクリップに
+    // `markDigestShown`が印を打ってしまう。重複して届くほうが、黙って焼けるより軽い。
   });
   await markDigestShown(
     env,

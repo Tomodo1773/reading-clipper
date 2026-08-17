@@ -163,7 +163,10 @@ describe('weekly digest', () => {
     expect(JSON.stringify(groups['clip-1'])).toContain('本文の書き出しがここに入る。');
     expect(JSON.stringify(groups['clip-1'])).toContain('https://example.com/1');
     // メタ行にはホストと保存時期を出す。ホストはパスから取る。
-    expect(JSON.stringify(groups['clip-1'])).toContain('zenn.dev ・ 2026年8月に保存');
+    // mrkdwnにするとSlackが`<http://zenn.dev|zenn.dev>`へ変えてしまうのでplain_textで出す。
+    const meta = groups['clip-1']?.[2] as { type: string; elements: { type: string; text: string }[] };
+    expect(meta.type).toBe('context');
+    expect(meta.elements[0]).toEqual({ type: 'plain_text', text: 'zenn.dev ・ 2026年8月に保存' });
 
     // スレッドの文脈に一覧が残るので、「2番目のやつ片付けて」をAIが解決できる。
     expect(thread.names).toEqual(['D123:1700000000.000100']);
@@ -237,6 +240,18 @@ describe('weekly digest', () => {
     expect((groupsOf(posted.blocks)['clip-0']?.[0] as { accessory?: unknown }).accessory).toBeUndefined();
     // 長すぎると分かっている時点で捨てるので、取得も試みない。
     expect(slack.imageRequests).toEqual([]);
+  });
+
+  it('posts without an idempotency key so a rerun is not swallowed', async () => {
+    // 渡すとSlackは重複と見なして新しいメッセージを作らず、既存のtsを返す。
+    // cronは再試行されないので排除する対象が無く、渡すと「投稿できていないのに成功」
+    // が起きて、表示していないクリップにmarkDigestShownが印を打つ（ADR 0011）。
+    await seed([{ path: 'clips/qiita.com/記事.md', url: 'https://example.com/1' }]);
+    const slack = mockSlack();
+
+    await runWeeklyDigest(makeEnv({ THREAD: threadStub().namespace }));
+
+    expect(slack.bodies['chat.postMessage']).not.toHaveProperty('client_msg_id');
   });
 
   it('does not mark clips as shown when the post fails', async () => {

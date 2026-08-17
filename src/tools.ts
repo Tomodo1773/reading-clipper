@@ -35,7 +35,7 @@ async function saveClip(env: Env, rawUrl: string, receivedAt: string) {
       path,
       url: canonicalUrl,
       title: content.title,
-      excerpt: clipExcerpt(content.markdown),
+      excerpt: clipExcerpt(content.markdown, content.title),
       imageUrl,
       clippedAt: receivedAt,
     });

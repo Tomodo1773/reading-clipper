@@ -102,11 +102,14 @@ describe('queue handler', () => {
 
   it('reposts the stored reply for a redelivered event without calling the model', async () => {
     const slackTexts: string[] = [];
+    const slackBodies: Record<string, unknown>[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       if (String(input) !== 'https://slack.com/api/chat.postMessage') {
         throw new Error(`unexpected request: ${String(input)}`);
       }
-      slackTexts.push(JSON.parse(String(init?.body)).text);
+      const body = JSON.parse(String(init?.body));
+      slackBodies.push(body);
+      slackTexts.push(body.text);
       return jsonResponse({ ok: true, ts: '1700000000.000200' });
     });
     const thread = threadStub({ reply: '一度だけ答えるわ。' });
@@ -117,6 +120,9 @@ describe('queue handler', () => {
     expect(slackTexts).toEqual(['一度だけ答えるわ。']);
     expect(thread.saved).toEqual([]);
     expect(ack).toHaveBeenCalledOnce();
+    // Queuesはat-least-onceで、ackの前に落ちれば同じジョブがもう一度届く。
+    // 冪等キーが要るのはこの経路で、ダイジェストは逆に持ってはいけない（ADR 0011）。
+    expect(slackBodies[0]).toHaveProperty('client_msg_id');
   });
 
   /**

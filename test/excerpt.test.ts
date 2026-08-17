@@ -46,3 +46,25 @@ describe('clipExcerpt', () => {
     expect(clipExcerpt('\n\n```\n\n```\n\n')).toBe('');
   });
 });
+
+describe('clipExcerpt with the article title', () => {
+  it('drops a leading heading that just repeats the title', () => {
+    // XとZennのクリップは本文が`# タイトル`で始まる。タイトルは同じ行に出ているので、
+    // 落とさないと抜粋100文字がまるごと再掲になる。
+    const excerpt = clipExcerpt('# 昨日更新されたXのアルゴリズム\n\niwashi @iwashi86\n\n本文。', '昨日更新されたXのアルゴリズム');
+
+    expect(excerpt).toBe('iwashi @iwashi86 本文。');
+  });
+
+  it('keeps a leading heading that says something else', () => {
+    const excerpt = clipExcerpt('# 全体像\n\n用語を整理する。', 'オントロジー入門');
+
+    expect(excerpt).toBe('全体像 用語を整理する。');
+  });
+
+  it('drops the title heading that follows a front matter block', () => {
+    const excerpt = clipExcerpt('---\ntags: x\n---\n\n# 題名\n\n本文。', '題名');
+
+    expect(excerpt).toBe('本文。');
+  });
+});

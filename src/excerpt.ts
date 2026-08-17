@@ -9,11 +9,25 @@
 /** ダイジェストの1行に収まる長さ。これ以上は読まずに記事を開いたほうが早い。 */
 const EXCERPT_CHARS = 100;
 
-export function clipExcerpt(markdown: string): string {
-  const text = markdown
-    // 本文がフロントマターで始まるクリップがある（Qiitaの`.md`は原稿ごと保存されている）。
-    // 区切りだけ落とすと`title:`や`tags:`が抜粋の先頭に居座る。
-    .replace(/^\s*---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, ' ')
+/**
+ * 本文が記事タイトルそのままの見出しで始まるクリップがある（X・Zennは必ずそうなる）。
+ * タイトルはダイジェストの同じ行に出ているので、抜粋で繰り返すと100文字を丸ごと無駄にする。
+ */
+function dropTitleHeading(markdown: string, title: string | undefined): string {
+  if (!title) return markdown;
+  return markdown.replace(/^\s*#{1,6}[ \t]+(.+?)[ \t]*(?:\r?\n|$)/, (match, heading: string) =>
+    heading.trim() === title.trim() ? '' : match,
+  );
+}
+
+export function clipExcerpt(markdown: string, title?: string): string {
+  const text = dropTitleHeading(
+    markdown
+      // 本文がフロントマターで始まるクリップがある（Qiitaの`.md`は原稿ごと保存されている）。
+      // 区切りだけ落とすと`title:`や`tags:`が抜粋の先頭に居座る。
+      .replace(/^\s*---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, ' '),
+    title,
+  )
     // コードブロックは切り詰めると読めないので、丸ごと落とす。
     .replace(/^```[\s\S]*?^```/gm, ' ')
     .replace(/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/gm, ' ')

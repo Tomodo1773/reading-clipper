@@ -149,7 +149,7 @@ for (const file of files) {
     path: `clips/${relative(clipsDir, file).split(sep).join('/')}`,
     url: fields.source_url,
     title: fields.title,
-    excerpt: clipExcerpt(body),
+    excerpt: clipExcerpt(body, fields.title),
     imageUrl: fields.image_url,
     clippedAt: fields.clipped_at || new Date().toISOString(),
   });
@@ -162,12 +162,12 @@ if (clips.length === 0) {
 
 await fillImages(clips);
 
-// 既にある行の`dismissed_at`と`last_shown_at`には触れない。表示に使う値は、
-// まだ埋まっていないものだけ埋める。`clipped_at`だけは上書きする（ADR 0011）。
-// 旧版のバックフィルが実行時刻を入れており、全件が同じ嘘の値になっているため。
+// GitHubから導ける列はすべて上書きし、導けない`dismissed_at`と`last_shown_at`だけ残す
+// （ADR 0011）。D1はGitHubに対する注釈レイヤーなので、これが「作り直す」の正しい意味になる。
+// 既存の値を温存すると、旧版が入れた嘘の`clipped_at`や、規則を変える前の抜粋を修復できない。
 const statements = clips.map(
   (clip) =>
-    `INSERT INTO clips (path, url, title, excerpt, image_url, clipped_at) VALUES (${sqlLiteral(clip.path)}, ${sqlLiteral(clip.url)}, ${sqlLiteral(clip.title)}, ${sqlLiteral(clip.excerpt)}, ${sqlLiteral(clip.imageUrl)}, ${sqlLiteral(clip.clippedAt)}) ON CONFLICT(path) DO UPDATE SET url = COALESCE(clips.url, excluded.url), title = COALESCE(clips.title, excluded.title), excerpt = COALESCE(clips.excerpt, excluded.excerpt), image_url = COALESCE(clips.image_url, excluded.image_url), clipped_at = excluded.clipped_at;`,
+    `INSERT INTO clips (path, url, title, excerpt, image_url, clipped_at) VALUES (${sqlLiteral(clip.path)}, ${sqlLiteral(clip.url)}, ${sqlLiteral(clip.title)}, ${sqlLiteral(clip.excerpt)}, ${sqlLiteral(clip.imageUrl)}, ${sqlLiteral(clip.clippedAt)}) ON CONFLICT(path) DO UPDATE SET url = excluded.url, title = excluded.title, excerpt = excluded.excerpt, image_url = excluded.image_url, clipped_at = excluded.clipped_at;`,
 );
 
 process.stdout.write(`${statements.join('\n')}\n`);

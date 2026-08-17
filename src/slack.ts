@@ -92,14 +92,23 @@ export async function postSlackMessage(options: {
   /** blocksを付けたときも通知とアクセシビリティのために必ず入れる。 */
   text: string;
   blocks?: unknown[];
-  idempotencyKey: string;
+  /**
+   * 同じ処理が再実行されうる経路にだけ渡す（ADR 0011）。
+   *
+   * 渡すとSlackは同じキーの投稿を重複と見なし、新しいメッセージを作らずに既存のtsを返す。
+   * 再試行の無い経路で渡すと、投稿できていないのに成功として返るだけになる。
+   * 呼び出し側はこの2つを区別できないので、再試行がある経路以外では渡さない。
+   */
+  idempotencyKey?: string;
 }): Promise<string> {
   const result = await callSlackApi('chat.postMessage', options.token, {
     channel: options.channel,
     thread_ts: options.threadTs,
     text: options.text,
     blocks: options.blocks,
-    client_msg_id: await deterministicUuid(options.idempotencyKey),
+    ...(options.idempotencyKey
+      ? { client_msg_id: await deterministicUuid(options.idempotencyKey) }
+      : {}),
     unfurl_links: false,
     unfurl_media: false,
   });
