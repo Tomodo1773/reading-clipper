@@ -16,7 +16,7 @@
 --   ALTER TABLE clips ADD COLUMN image_url TEXT;
 
 CREATE TABLE IF NOT EXISTS clips (
-  -- clips/{host}/{title}.md。ホストはここから取る。
+  -- clips/{title}.md。ホストはここには無く、`url`から取る。
   path          TEXT PRIMARY KEY,
   -- 記事のcanonical URL。NULLの行はGitHubのファイルへリンクする。
   url           TEXT,

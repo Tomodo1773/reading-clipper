@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleQueueMessage } from '../src/processor';
 import type { ThreadAgent } from '../src/thread';
 import type { ChatJob } from '../src/types';
-import { jsonResponse, makeEnv, modelResponse } from './helpers';
+import { jsonResponse, makeEnv, modelResponse, readSlackCall } from './helpers';
 
 const job: ChatJob = {
   version: 2,
@@ -74,16 +74,16 @@ describe('queue handler', () => {
 
   it('runs the turn against the thread keyed by channel and thread_ts', async () => {
     const slackTexts: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      const url = String(input);
-      if (url.includes(':generateContent')) {
-        return modelResponse([{ text: 'こんばんは。今日は何を読むの？' }]);
-      }
-      if (url === 'https://slack.com/api/chat.postMessage') {
-        slackTexts.push(JSON.parse(String(init?.body)).text);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const call = await readSlackCall(input);
+      if (call?.method === 'chat.postMessage') {
+        slackTexts.push(String(call.params.text));
         return jsonResponse({ ok: true, ts: '1700000000.000200' });
       }
-      throw new Error(`unexpected request: ${url}`);
+      if (String(input).includes(':generateContent')) {
+        return modelResponse([{ text: 'こんばんは。今日は何を読むの？' }]);
+      }
+      throw new Error(`unexpected request: ${String(input)}`);
     });
     const thread = threadStub();
     const { ack, message } = queueMessage();
@@ -102,14 +102,12 @@ describe('queue handler', () => {
 
   it('reposts the stored reply for a redelivered event without calling the model', async () => {
     const slackTexts: string[] = [];
-    const slackBodies: Record<string, unknown>[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      if (String(input) !== 'https://slack.com/api/chat.postMessage') {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const call = await readSlackCall(input);
+      if (call?.method !== 'chat.postMessage') {
         throw new Error(`unexpected request: ${String(input)}`);
       }
-      const body = JSON.parse(String(init?.body));
-      slackBodies.push(body);
-      slackTexts.push(body.text);
+      slackTexts.push(String(call.params.text));
       return jsonResponse({ ok: true, ts: '1700000000.000200' });
     });
     const thread = threadStub({ reply: '一度だけ答えるわ。' });
@@ -117,12 +115,12 @@ describe('queue handler', () => {
 
     await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
 
+    // Queuesはat-least-onceで、ackの前に落ちれば同じジョブがもう一度届く。
+    // 守るのはモデルを二度呼ばないことと、返信の中身が変わらないことまで。
+    // 投稿そのものの重複排除はしない（ADR 0014）。
     expect(slackTexts).toEqual(['一度だけ答えるわ。']);
     expect(thread.saved).toEqual([]);
     expect(ack).toHaveBeenCalledOnce();
-    // Queuesはat-least-onceで、ackの前に落ちれば同じジョブがもう一度届く。
-    // 冪等キーが要るのはこの経路で、ダイジェストは逆に持ってはいけない（ADR 0011）。
-    expect(slackBodies[0]).toHaveProperty('client_msg_id');
   });
 
   /**
@@ -134,7 +132,7 @@ describe('queue handler', () => {
   it('notifies and retries a transient final failure so Cloudflare can move it to the DLQ', async () => {
     let slackNotified = false;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      if (String(input) === 'https://slack.com/api/chat.postMessage') {
+      if ((await readSlackCall(input))?.method === 'chat.postMessage') {
         slackNotified = true;
         return jsonResponse({ ok: true, ts: '1700000000.000200' });
       }
@@ -154,7 +152,7 @@ describe('queue handler', () => {
   it('keeps retrying quietly while attempts remain', async () => {
     let slackNotified = false;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      if (String(input) === 'https://slack.com/api/chat.postMessage') {
+      if ((await readSlackCall(input))?.method === 'chat.postMessage') {
         slackNotified = true;
         return jsonResponse({ ok: true, ts: '1700000000.000200' });
       }

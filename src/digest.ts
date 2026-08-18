@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai';
+import { type AnyMessageBlock, type SectionBlock, SlackAPIClient } from 'slack-edge';
 import {
   type DigestClip,
   markDigestShown,
@@ -6,9 +7,8 @@ import {
   selectUndismissed,
   setClipDismissed,
 } from './clips';
-import { openSlackDirectMessage, postSlackMessage, updateSlackMessage } from './slack';
 import type { Env } from './types';
-import { asRecord, fetchWithTimeout } from './utils';
+import { fetchWithTimeout } from './utils';
 
 /**
  * ダイジェストの行に付くボタン。押下はAIを経由せず直接D1を更新する（ADR 0010）。
@@ -25,46 +25,20 @@ const MAX_IMAGE_URL_CHARS = 3000;
 /** Slackが受け付ける画像形式。これ以外を渡すと投稿ごと拒否される。 */
 const IMAGE_CONTENT_TYPE = /^image\/(?:png|jpeg|jpg|gif)\b/i;
 
-interface TextObject {
-  type: 'mrkdwn' | 'plain_text';
-  text: string;
-}
-
-interface DismissButton {
-  type: 'button';
-  text: { type: 'plain_text'; text: string };
-  action_id: string;
-  value: string;
-}
-
-interface Thumbnail {
-  type: 'image';
-  image_url: string;
-  alt_text: string;
-}
-
-/**
- * 1件を section（タイトルと抜粋、サムネイル）+ actions（ボタン）+ context（メタ）の
- * 3ブロックで表す（ADR 0011）。`accessory`は1つしか置けないため、サムネイルを出すと
- * ボタンは`actions`へ出さざるを得ない。
- */
-export type DigestBlock =
-  | { type: 'header'; text: { type: 'plain_text'; text: string } }
-  | { type: 'divider' }
-  | { type: 'section'; block_id?: string; text: TextObject; accessory?: Thumbnail }
-  | { type: 'actions'; block_id: string; elements: DismissButton[] }
-  | { type: 'context'; block_id: string; elements: TextObject[] };
-
 /** ADR 0005でファイル名を記事タイトルそのものにしたが、長い題名はそこで削られる。 */
 function clipTitle(clip: DigestClip): string {
   if (clip.title) return clip.title;
   return (clip.path.split('/').pop() ?? clip.path).replace(/\.md$/, '');
 }
 
-/** `clips/{host}/{title}.md`。ホストはパスから取れるので列に持たない。 */
-function clipHost(path: string): string {
-  const segments = path.split('/');
-  return segments.length >= 3 ? (segments[1] ?? '') : '';
+/** 保存先はフラットな`clips/{title}.md`なので、ホストは列に持たず`url`から出す。 */
+function clipHost(url: string | null): string {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -91,7 +65,7 @@ function clipHref(env: Env, clip: DigestClip): string {
 }
 
 /** 「未読」と呼ばない。記録しているのは片付けたかどうかだけである（ADR 0010）。 */
-function headBlocks(remaining: number): DigestBlock[] {
+function headBlocks(remaining: number): AnyMessageBlock[] {
   if (remaining === 0) {
     return [
       { type: 'header', text: { type: 'plain_text', text: 'まだ片付いていないクリップ' } },
@@ -108,16 +82,20 @@ function headBlocks(remaining: number): DigestBlock[] {
 }
 
 /**
+ * 1件を section（タイトルと抜粋、サムネイル）+ actions（ボタン）+ context（メタ）の
+ * 3ブロックで表す（ADR 0011）。`accessory`は1つしか置けないため、サムネイルを出すと
+ * ボタンは`actions`へ出さざるを得ない。
+ *
  * `block_id`は組を識別するためだけに使う。パスをそのまま入れない。
  * ファイル名が記事タイトルそのままなので、`block_id`の255文字上限を超えうる。
  */
-function clipBlocks(env: Env, clip: DigestClip, index: number): DigestBlock[] {
+function clipBlocks(env: Env, clip: DigestClip, index: number): AnyMessageBlock[] {
   const id = `clip-${index}`;
   const title = clipTitle(clip);
   const link = `*<${escapeMrkdwn(clipHref(env, clip))}|${escapeMrkdwn(title)}>*`;
   const excerpt = clip.excerpt ? `\n${escapeMrkdwn(clip.excerpt)}` : '';
-  const meta = [clipHost(clip.path), savedAt(clip.clippedAt)].filter(Boolean).join(' ・ ');
-  const section: DigestBlock = {
+  const meta = [clipHost(clip.url), savedAt(clip.clippedAt)].filter(Boolean).join(' ・ ');
+  const section: SectionBlock = {
     type: 'section',
     block_id: id,
     text: { type: 'mrkdwn', text: `${link}${excerpt}` },
@@ -154,7 +132,7 @@ function clipBlocks(env: Env, clip: DigestClip, index: number): DigestBlock[] {
   ];
 }
 
-export function digestBlocks(env: Env, clips: DigestClip[]): DigestBlock[] {
+export function digestBlocks(env: Env, clips: DigestClip[]): AnyMessageBlock[] {
   return [
     ...headBlocks(clips.length),
     ...clips.flatMap((clip, index) => clipBlocks(env, clip, index)),
@@ -201,17 +179,14 @@ async function isFetchableImage(url: string): Promise<boolean> {
 
 interface ClipGroup {
   path: string;
-  blocks: unknown[];
+  blocks: AnyMessageBlock[];
 }
 
 /** ボタンを持つ`actions`ブロックからパスを取り出す。 */
-function dismissValue(block: Record<string, unknown> | undefined): string | undefined {
-  if (!Array.isArray(block?.elements)) return undefined;
+function dismissValue(block: AnyMessageBlock): string | undefined {
+  if (block.type !== 'actions') return undefined;
   for (const element of block.elements) {
-    const record = asRecord(element);
-    if (record?.action_id === DISMISS_ACTION_ID && typeof record.value === 'string') {
-      return record.value;
-    }
+    if (element.type === 'button' && element.action_id === DISMISS_ACTION_ID) return element.value;
   }
   return undefined;
 }
@@ -222,16 +197,14 @@ function dismissValue(block: Record<string, unknown> | undefined): string | unde
  * 1件が複数ブロックに散るため、`block_id`の接頭辞で組をまとめる。
  * パスはボタンの`value`にしか無いので、組の中から拾う。
  */
-function clipGroups(blocks: unknown[]): ClipGroup[] {
+function clipGroups(blocks: AnyMessageBlock[]): ClipGroup[] {
   const groups = new Map<string, ClipGroup>();
   for (const block of blocks) {
-    const record = asRecord(block);
-    const blockId = typeof record?.block_id === 'string' ? record.block_id : undefined;
-    const id = blockId?.match(/^(clip-\d+)(?:-|$)/)?.[1];
+    const id = block.block_id?.match(/^(clip-\d+)(?:-|$)/)?.[1];
     if (!id) continue;
     const group = groups.get(id) ?? { path: '', blocks: [] };
     group.blocks.push(block);
-    group.path = dismissValue(record) ?? group.path;
+    group.path = dismissValue(block) ?? group.path;
     groups.set(id, group);
   }
   return [...groups.values()].filter((group) => group.path);
@@ -244,7 +217,10 @@ function clipGroups(blocks: unknown[]): ClipGroup[] {
  * D1から作り直すと、ボタンを1回押すたびに残り全件のサムネイルを取り直すことになる。
  * 見出しだけは残り件数を持つので付け替える。
  */
-export function keepClipBlocks(blocks: unknown[], keep: ReadonlySet<string>): unknown[] {
+export function keepClipBlocks(
+  blocks: AnyMessageBlock[],
+  keep: ReadonlySet<string>,
+): AnyMessageBlock[] {
   const kept = clipGroups(blocks).filter((group) => keep.has(group.path));
   return [...headBlocks(kept.length), ...kept.flatMap((group) => group.blocks)];
 }
@@ -268,18 +244,21 @@ function digestTurn(clips: DigestClip[]): ModelMessage[] {
 
 /** 日曜9時（JST）に1通投稿する。cronトリガーはUTC指定なので`0 0 * * SUN`。 */
 export async function runWeeklyDigest(env: Env, now = new Date()): Promise<void> {
+  const slack = new SlackAPIClient(env.SLACK_BOT_TOKEN);
   const clips = await selectDigestClips(env);
   const shown = await withUsableThumbnails(clips);
-  const channel = await openSlackDirectMessage(env.SLACK_BOT_TOKEN, env.SLACK_ALLOWED_USER_ID);
+  // cronで動く`scheduled`にはSlackのイベントが無く、投稿先の`channel`が手元に無い。
+  // 既に開いているDMなら同じIDが返るだけで、新しい会話は作られない（`im:write`が要る）。
+  const opened = await slack.conversations.open({ users: env.SLACK_ALLOWED_USER_ID });
+  const channel = opened.channel?.id;
+  if (!channel) throw new Error('Slack conversations.open returned no channel');
   const at = now.toISOString();
-  const ts = await postSlackMessage({
-    token: env.SLACK_BOT_TOKEN,
+  const { ts } = await slack.chat.postMessage({
     channel,
     text: digestText(shown.length),
     blocks: digestBlocks(env, shown),
-    // 冪等キーを渡さない（ADR 0011）。cronは再試行されないので重複排除する対象が無く、
-    // 渡すと投稿されていないのに成功として返り、表示していないクリップに
-    // `markDigestShown`が印を打ってしまう。重複して届くほうが、黙って焼けるより軽い。
+    unfurl_links: false,
+    unfurl_media: false,
   });
   await markDigestShown(
     env,
@@ -301,7 +280,7 @@ export async function runWeeklyDigest(env: Env, now = new Date()): Promise<void>
  */
 export async function dismissDigestClip(
   env: Env,
-  target: { path: string; channel: string; messageTs: string; blocks: unknown[] },
+  target: { path: string; channel: string; messageTs: string; blocks: AnyMessageBlock[] },
 ): Promise<void> {
   await setClipDismissed(env, target.path, true, new Date().toISOString());
   const groups = clipGroups(target.blocks);
@@ -309,8 +288,7 @@ export async function dismissDigestClip(
     env,
     groups.map((group) => group.path),
   );
-  await updateSlackMessage({
-    token: env.SLACK_BOT_TOKEN,
+  await new SlackAPIClient(env.SLACK_BOT_TOKEN).chat.update({
     channel: target.channel,
     ts: target.messageTs,
     text: digestText(groups.filter((group) => alive.has(group.path)).length),

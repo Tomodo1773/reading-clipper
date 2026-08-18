@@ -101,6 +101,6 @@ function makeClipFileName(title: string): string {
 }
 
 /** タイトルは取得後にしか分からないため、fetchの結果を受け取って保存先を決める。 */
-export function buildClipPath(canonicalUrl: string, title: string): string {
-  return `clips/${new URL(canonicalUrl).hostname}/${makeClipFileName(title)}`;
+export function buildClipPath(title: string): string {
+  return `clips/${makeClipFileName(title)}`;
 }

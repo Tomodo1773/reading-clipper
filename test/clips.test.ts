@@ -50,17 +50,17 @@ describe('recordClip', () => {
   it('refreshes what the digest shows but keeps the dismissed mark', async () => {
     // `INSERT OR REPLACE`を使うと行ごと入れ替わり、片付けた印が黙って消える。
     await recordClip(env, {
-      path: 'clips/qiita.com/記事.md',
+      path: 'clips/記事.md',
       url: 'https://qiita.com/a/items/1',
       title: '古いタイトル',
       excerpt: '古い抜粋',
       imageUrl: 'https://img.example.com/old.png',
       clippedAt: '2026-08-01T00:00:00.000Z',
     });
-    await setClipDismissed(env, 'clips/qiita.com/記事.md', true, '2026-08-02T00:00:00.000Z');
+    await setClipDismissed(env, 'clips/記事.md', true, '2026-08-02T00:00:00.000Z');
 
     await recordClip(env, {
-      path: 'clips/qiita.com/記事.md',
+      path: 'clips/記事.md',
       url: 'https://qiita.com/a/items/2',
       title: '新しいタイトル',
       excerpt: '新しい抜粋',
@@ -68,7 +68,7 @@ describe('recordClip', () => {
       clippedAt: '2026-08-03T00:00:00.000Z',
     });
 
-    expect(await readClip('clips/qiita.com/記事.md')).toMatchObject({
+    expect(await readClip('clips/記事.md')).toMatchObject({
       url: 'https://qiita.com/a/items/2',
       // ここを更新し忘れると、記事が変わっても古い表示がダイジェストに残り続ける。
       title: '新しいタイトル',
@@ -82,14 +82,14 @@ describe('recordClip', () => {
 
   it('stores a clip without an og:image as NULL rather than failing', async () => {
     await recordClip(env, {
-      path: 'clips/x.com/画像の無い記事.md',
+      path: 'clips/画像の無い記事.md',
       url: 'https://x.com/i/web/status/1',
       title: '画像の無い記事',
       excerpt: '抜粋',
       clippedAt: '2026-08-01T00:00:00.000Z',
     });
 
-    expect((await readClip('clips/x.com/画像の無い記事.md'))?.image_url).toBeNull();
+    expect((await readClip('clips/画像の無い記事.md'))?.image_url).toBeNull();
   });
 });
 

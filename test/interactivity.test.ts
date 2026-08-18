@@ -2,10 +2,17 @@ import { createExecutionContext, env as testEnv, waitOnExecutionContext } from '
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { digestBlocks } from '../src/digest';
 import worker from '../src/index';
-import { jsonResponse, makeEnv, resetClips, signedInteractivityRequest } from './helpers';
+import {
+  jsonResponse,
+  makeEnv,
+  readSlackCall,
+  resetClips,
+  signedInteractivityRequest,
+  slackAuthTestResponse,
+} from './helpers';
 
-const CLIP_PATH = 'clips/qiita.com/記事.md';
-const OTHER_PATH = 'clips/zenn.dev/別の記事.md';
+const CLIP_PATH = 'clips/記事.md';
+const OTHER_PATH = 'clips/別の記事.md';
 
 /** 投稿されたダイジェストのblocks。押した時点のSlackのpayloadに丸ごと入ってくる。 */
 const POSTED_BLOCKS = digestBlocks(makeEnv(), [
@@ -34,18 +41,28 @@ function buttonPress(path = CLIP_PATH, overrides: Record<string, unknown> = {}) 
     user: { id: 'U_ALLOWED' },
     channel: { id: 'D123' },
     message: { ts: '1700000000.000100', blocks: POSTED_BLOCKS },
-    actions: [{ action_id: 'dismiss_clip', value: path }],
+    actions: [{ type: 'button', action_id: 'dismiss_clip', value: path }],
     ...overrides,
   };
 }
 
-function mockSlack(): Record<string, unknown>[] {
-  const updates: Record<string, unknown>[] = [];
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-    if (String(input) !== 'https://slack.com/api/chat.update') {
-      throw new Error(`unexpected request: ${String(input)}`);
-    }
-    updates.push(JSON.parse(String((init as RequestInit).body)));
+interface PostedUpdate {
+  channel: string;
+  ts: string;
+  blocks: unknown[];
+}
+
+function mockSlack(): PostedUpdate[] {
+  const updates: PostedUpdate[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const call = await readSlackCall(input);
+    if (call?.method === 'auth.test') return slackAuthTestResponse();
+    if (call?.method !== 'chat.update') throw new Error(`unexpected request: ${String(input)}`);
+    updates.push({
+      channel: String(call.params.channel),
+      ts: String(call.params.ts),
+      blocks: call.params.blocks as unknown[],
+    });
     return jsonResponse({ ok: true });
   });
   return updates;
@@ -80,7 +97,7 @@ async function press(path = CLIP_PATH, overrides: Record<string, unknown> = {}):
 beforeEach(resetClips);
 afterEach(() => vi.restoreAllMocks());
 
-describe('POST /slack/interactivity', () => {
+describe('ダイジェストのボタン押下', () => {
   it('rejects an invalid signature', async () => {
     const request = await signedInteractivityRequest(buttonPress());
     request.headers.set('x-slack-signature', `v0=${'0'.repeat(64)}`);
@@ -101,7 +118,7 @@ describe('POST /slack/interactivity', () => {
 
     expect((await dismissedAt(CLIP_PATH))?.dismissed_at).not.toBeNull();
     expect(updates).toHaveLength(1);
-    const update = updates[0] as { channel: string; ts: string; blocks: unknown[] };
+    const update = updates[0]!;
     expect(update.channel).toBe('D123');
     expect(update.ts).toBe('1700000000.000100');
     // 見出しと区切り、残った1件ぶんの3ブロック。
@@ -121,7 +138,7 @@ describe('POST /slack/interactivity', () => {
     await press(CLIP_PATH);
     await press(OTHER_PATH);
 
-    const last = updates.at(-1) as { blocks: unknown[] };
+    const last = updates.at(-1)!;
     expect(last.blocks).toHaveLength(2);
     expect(JSON.stringify(last.blocks)).not.toContain(CLIP_PATH);
     expect(JSON.stringify(last.blocks)).not.toContain(OTHER_PATH);

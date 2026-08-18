@@ -1,32 +1,34 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
-import { addSlackReaction, verifySlackSignature } from '../src/slack';
-import type { ChatJob } from '../src/types';
-import { makeEnv, signedSlackRequest } from './helpers';
+import type { ChatJob, Env } from '../src/types';
+import { jsonResponse, makeEnv, readSlackCall, signedSlackRequest, slackAuthTestResponse } from './helpers';
 
-afterEach(() => vi.restoreAllMocks());
-
-/** Slack APIをまとめてモックする。既定はすべて成功。 */
-function mockSlackFetch(response: () => Response = () => slackResponse({ ok: true })) {
-  return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response());
+interface SlackCall {
+  method: string;
+  params: Record<string, unknown>;
 }
 
-function slackResponse(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { 'content-type': 'application/json' },
+let slackCalls: SlackCall[] = [];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  slackCalls = [];
+});
+
+/** Slack APIをまとめてモックする。`auth.test`以外の既定はすべて成功。 */
+function mockSlackFetch(response: () => Response = () => jsonResponse({ ok: true })) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const call = await readSlackCall(input);
+    if (!call) throw new Error(`unexpected request: ${String(input)}`);
+    slackCalls.push(call);
+    return call.method === 'auth.test' ? slackAuthTestResponse() : response();
   });
 }
 
-/** モックしたfetchへ渡された、あるSlack APIメソッドのリクエストボディを取り出す。 */
-function slackCallBodies(
-  fetchMock: ReturnType<typeof mockSlackFetch>,
-  method: string,
-): Record<string, unknown>[] {
-  return fetchMock.mock.calls
-    .filter(([input]) => String(input) === `https://slack.com/api/${method}`)
-    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+/** あるSlack APIメソッドへ渡されたリクエストボディを取り出す。 */
+function slackCallBodies(method: string): Record<string, unknown>[] {
+  return slackCalls.filter((call) => call.method === method).map((call) => call.params);
 }
 
 describe('Slack Events API', () => {
@@ -39,7 +41,8 @@ describe('Slack Events API', () => {
     );
     await waitOnExecutionContext(ctx);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ challenge: 'challenge-value' });
+    // slack-edgeはchallengeを素のテキストで返す。SlackはJSONとテキストのどちらも受ける。
+    expect(await response.text()).toBe('challenge-value');
   });
 
   it('rejects an invalid signature', async () => {
@@ -51,12 +54,6 @@ describe('Slack Events API', () => {
     expect(response.status).toBe(401);
   });
 
-  it('rejects requests older than five minutes', async () => {
-    expect(
-      await verifySlackSignature('body', '100', `v0=${'0'.repeat(64)}`, 'secret', 401),
-    ).toBe(false);
-  });
-
   it('queues the message text as it arrived, without looking for URLs', async () => {
     const sent: ChatJob[] = [];
     const env = makeEnv({
@@ -64,7 +61,7 @@ describe('Slack Events API', () => {
         send: async (job: ChatJob) => void sent.push(job),
       } as unknown as Queue<ChatJob>,
     });
-    const fetchMock = mockSlackFetch();
+    mockSlackFetch();
     const ctx = createExecutionContext();
     const request = await signedSlackRequest({
       type: 'event_callback',
@@ -93,11 +90,12 @@ describe('Slack Events API', () => {
         receivedAt: '2023-11-14T22:13:20.000Z',
       },
     ]);
-    expect(slackCallBodies(fetchMock, 'reactions.add')).toEqual([
+    expect(slackCallBodies('reactions.add')).toEqual([
       { channel: 'D123', timestamp: '1700000000.000100', name: 'eyes' },
     ]);
-    // 受付WorkerがSlackへ呼ぶのはreactions.addだけ。返信は後段のconsumerが送る。
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // 受付WorkerがSlackへ呼ぶのは、slack-edgeのauth.testとreactions.addだけ。
+    // 返信は後段のconsumerが送る。
+    expect(slackCalls.map((call) => call.method)).toEqual(['auth.test', 'reactions.add']);
   });
 
   it('queues a message without a URL as an ordinary conversation turn', async () => {
@@ -136,7 +134,7 @@ describe('Slack Events API', () => {
         send: async (job: ChatJob) => void sent.push(job),
       } as unknown as Queue<ChatJob>,
     });
-    const fetchMock = mockSlackFetch();
+    mockSlackFetch();
     const ctx = createExecutionContext();
     const request = await signedSlackRequest({
       type: 'event_callback',
@@ -156,7 +154,7 @@ describe('Slack Events API', () => {
     await waitOnExecutionContext(ctx);
     expect(response.status).toBe(200);
     expect(sent[0]?.slackThreadTs).toBe('1700000000.000100');
-    expect(slackCallBodies(fetchMock, 'reactions.add')).toEqual([
+    expect(slackCallBodies('reactions.add')).toEqual([
       { channel: 'D123', timestamp: '1700000900.000500', name: 'eyes' },
     ]);
   });
@@ -222,6 +220,64 @@ describe('Slack Events API', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * secretが未登録だと `env` の値は型に反して `undefined` になる。突き合わせる相手が
+   * payload側にも無いと `undefined === undefined` が成立し、allowlistを素通りする。
+   * READMEの「設定値が空欄の場合も全拒否する」はこの経路を指す。
+   *
+   * 各ケースは「未設定の側だけがpayloadからも欠けている」形にする。そこを揃えないと
+   * もう一方の突き合わせが先に落ちてしまい、テストが穴を通り越して緑になる。
+   */
+  it.each([
+    {
+      name: 'team unset, and the payload carries no team_id',
+      unset: { SLACK_ALLOWED_TEAM_ID: undefined },
+      teamId: undefined,
+      user: 'U_ALLOWED',
+    },
+    {
+      name: 'user unset, and the payload carries no event.user',
+      unset: { SLACK_ALLOWED_USER_ID: undefined },
+      teamId: 'T_ALLOWED',
+      user: undefined,
+    },
+    {
+      name: 'both unset, and the payload carries neither',
+      unset: { SLACK_ALLOWED_TEAM_ID: undefined, SLACK_ALLOWED_USER_ID: undefined },
+      teamId: undefined,
+      user: undefined,
+    },
+  ])('rejects everything when the allowlist is unconfigured ($name)', async (testCase) => {
+    const sent: ChatJob[] = [];
+    const env = makeEnv({
+      CLIP_QUEUE: {
+        send: async (job: ChatJob) => void sent.push(job),
+      } as unknown as Queue<ChatJob>,
+      ...(testCase.unset as Partial<Env>),
+    });
+    const fetchMock = mockSlackFetch();
+    const ctx = createExecutionContext();
+    const request = await signedSlackRequest({
+      type: 'event_callback',
+      event_id: 'EvUnconfigured',
+      ...(testCase.teamId ? { team_id: testCase.teamId } : {}),
+      event: {
+        type: 'message',
+        channel_type: 'im',
+        ...(testCase.user ? { user: testCase.user } : {}),
+        channel: 'D123',
+        ts: '1700000000.000700',
+        text: 'https://example.com/secret',
+      },
+    });
+    const response = await worker.fetch(request, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('still queues the job when the reaction cannot be added', async () => {
     const sent: ChatJob[] = [];
     const env = makeEnv({
@@ -229,8 +285,8 @@ describe('Slack Events API', () => {
         send: async (job: ChatJob) => void sent.push(job),
       } as unknown as Queue<ChatJob>,
     });
-    mockSlackFetch(() => slackResponse({ ok: false, error: 'missing_scope' }));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mockSlackFetch(() => jsonResponse({ ok: false, error: 'missing_scope' }));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const ctx = createExecutionContext();
     const request = await signedSlackRequest({
       type: 'event_callback',
@@ -250,33 +306,7 @@ describe('Slack Events API', () => {
 
     expect(response.status).toBe(200);
     expect(sent).toHaveLength(1);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toContain('missing_scope');
-  });
-});
-
-describe('addSlackReaction', () => {
-  it('treats already_reacted as success, because Slack redelivers events', async () => {
-    mockSlackFetch(() => slackResponse({ ok: false, error: 'already_reacted' }));
-    await expect(
-      addSlackReaction({
-        token: 'xoxb-test',
-        channel: 'D123',
-        timestamp: '1700000000.000100',
-        name: 'eyes',
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it('throws on any other Slack API error', async () => {
-    mockSlackFetch(() => slackResponse({ ok: false, error: 'invalid_name' }));
-    await expect(
-      addSlackReaction({
-        token: 'xoxb-test',
-        channel: 'D123',
-        timestamp: '1700000000.000100',
-        name: 'eyes',
-      }),
-    ).rejects.toThrow('Slack reactions.add failed: invalid_name');
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(String(logged.mock.calls[0]?.[0])).toContain('missing_scope');
   });
 });

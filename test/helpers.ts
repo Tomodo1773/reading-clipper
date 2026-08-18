@@ -50,6 +50,35 @@ export function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+const SLACK_API = 'https://slack.com/api/';
+
+/**
+ * モックしたfetchへ来たものがSlack API呼び出しなら、メソッド名とフォーム本文を返す。
+ *
+ * Slack APIクライアントは`fetch(new Request(...))`と1引数で呼ぶため、URLも本文も
+ * `init`ではなくRequestから読む。本文はform urlencodedで、blocksのような配列は
+ * 1フィールドにJSONで入るのでここで戻す。
+ */
+export async function readSlackCall(
+  input: RequestInfo | URL,
+): Promise<{ method: string; params: Record<string, unknown> } | undefined> {
+  if (!(input instanceof Request) || !input.url.startsWith(SLACK_API)) return undefined;
+  // workerdは`.text()`をform urlencodedに対して警告するため、バイト列から自分で起こす。
+  const body = new TextDecoder().decode(await input.arrayBuffer());
+  const params: Record<string, unknown> = Object.fromEntries(new URLSearchParams(body));
+  if (typeof params.blocks === 'string') params.blocks = JSON.parse(params.blocks) as unknown[];
+  return { method: input.url.slice(SLACK_API.length), params };
+}
+
+/**
+ * slack-edgeはハンドラを呼ぶ前に`auth.test`で自分のbot IDを引き、自分が出した投稿の
+ * イベントを落とす判定に使う。`bot_id`を欠くとイベント側の欠けたそれと一致してしまい、
+ * 本物のDMまで自己イベント扱いで消える。
+ */
+export function slackAuthTestResponse(): Response {
+  return jsonResponse({ ok: true, user_id: 'U_BOT', bot_id: 'B_BOT', team_id: 'T_ALLOWED' });
+}
+
 /**
  * 記事ページのHTML応答。
  * `landedAt`を渡すとリダイレクトを追った後の応答になる。`new Response()`の`url`は常に
@@ -133,12 +162,15 @@ async function signedSlackPost(
   });
 }
 
+/** Event SubscriptionsとInteractivity & Shortcutsは同じRequest URLへ届く（ADR 0014）。 */
+const SLACK_EVENTS_PATH = '/slack/events';
+
 export async function signedSlackRequest(
   payload: unknown,
   signingSecret = 'test-signing-secret',
 ): Promise<Request> {
   return signedSlackPost(
-    '/slack/events',
+    SLACK_EVENTS_PATH,
     JSON.stringify(payload),
     'application/json',
     signingSecret,
@@ -151,7 +183,7 @@ export async function signedInteractivityRequest(
   signingSecret = 'test-signing-secret',
 ): Promise<Request> {
   return signedSlackPost(
-    '/slack/interactivity',
+    SLACK_EVENTS_PATH,
     new URLSearchParams({ payload: JSON.stringify(payload) }).toString(),
     'application/x-www-form-urlencoded',
     signingSecret,

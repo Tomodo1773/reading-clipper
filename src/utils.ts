@@ -25,11 +25,6 @@ export function assertOk(response: Response, stage: ProcessingStage): void {
   );
 }
 
-export async function sha256Bytes(value: string): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return new Uint8Array(digest);
-}
-
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   const chunkSize = 0x8000;

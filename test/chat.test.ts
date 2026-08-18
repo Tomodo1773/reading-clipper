@@ -169,8 +169,8 @@ describe('chat turn', () => {
       receivedAt: RECEIVED_AT,
     });
 
-    // 保存はADR 0005のまま。要約はファイルに入れない。
-    expect(recorded.savedPath).toBe('clips/qiita.com/Worker設計.md');
+    // 保存はADR 0005/ADR 0013のまま。要約はファイルに入れない。
+    expect(recorded.savedPath).toBe('clips/Worker設計.md');
     expect(recorded.savedMarkdown).toContain('## 概要\n\nQueueで重い処理を分離する。');
     expect(recorded.savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい');
 
@@ -194,7 +194,7 @@ describe('chat turn', () => {
     expect(
       await testEnv.CLIPS.prepare('SELECT path, url FROM clips').first(),
     ).toEqual({
-      path: 'clips/qiita.com/Worker設計.md',
+      path: 'clips/Worker設計.md',
       url: 'https://qiita.com/alice/items/abc',
     });
 
@@ -271,8 +271,8 @@ describe('chat turn', () => {
       requested_url: 'https://share.google/tQD',
       source: 'zenn',
     });
-    // clips/share.google/ には作られない。
-    expect(recorded.savedPath).toBe('clips/zenn.dev/Zennの記事.md');
+    expect(recorded.savedPath).toBe('clips/Zennの記事.md');
+    // 台帳の`url`は中継URLではなく着いた先になる。
     expect(await testEnv.CLIPS.prepare('SELECT url FROM clips').first()).toEqual({ url: article });
   });
 

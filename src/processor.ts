@@ -1,7 +1,7 @@
 import type { ModelMessage } from 'ai';
+import { SlackAPIClient } from 'slack-edge';
 import { runChatTurn } from './chat';
 import { asClipError, ClipError } from './errors';
-import { postSlackMessage } from './slack';
 import type { ChatJob, Env } from './types';
 
 const MAX_QUEUE_RETRIES = 3;
@@ -32,6 +32,7 @@ function failureReply(error: ClipError): string {
 
 export async function handleQueueMessage(message: Message<ChatJob>, env: Env): Promise<void> {
   const job = message.body;
+  const slack = new SlackAPIClient(env.SLACK_BOT_TOKEN);
   try {
     validateJob(job);
     const thread = env.THREAD.get(
@@ -53,12 +54,12 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
       );
       reply = turn.reply;
     }
-    await postSlackMessage({
-      token: env.SLACK_BOT_TOKEN,
+    await slack.chat.postMessage({
       channel: job.slackChannel,
-      threadTs: job.slackThreadTs,
+      thread_ts: job.slackThreadTs,
       text: reply,
-      idempotencyKey: `${job.jobId}:reply`,
+      unfurl_links: false,
+      unfurl_media: false,
     });
     message.ack();
   } catch (error) {
@@ -79,12 +80,12 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
     // 返信先が読めない壊れたメッセージでは通知そのものが投げるため、送り先がある場合だけ通知する。
     if (giveUp && job?.slackChannel && job.slackThreadTs) {
       try {
-        await postSlackMessage({
-          token: env.SLACK_BOT_TOKEN,
+        await slack.chat.postMessage({
           channel: job.slackChannel,
-          threadTs: job.slackThreadTs,
+          thread_ts: job.slackThreadTs,
           text: failureReply(clipError),
-          idempotencyKey: `${job.jobId}:failure`,
+          unfurl_links: false,
+          unfurl_media: false,
         });
       } catch (replyError) {
         const slackError = asClipError(replyError, 'slack');

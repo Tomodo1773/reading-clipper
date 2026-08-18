@@ -18,7 +18,7 @@ import { buildClipPath, canonicalizeUrl } from './url';
  * 保存の成否は`saved`だけで表し、散文にしない。
  */
 async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string) {
-  const path = buildClipPath(content.canonicalUrl, content.title);
+  const path = buildClipPath(content.title);
   // 既存ファイルの更新にはshaが要る。同じタイトルの記事は上書きする。
   const existing = await getGitHubFile(env, path);
   const saved = await putGitHubFile(env, path, renderClipMarkdown(content, receivedAt), existing?.sha);
