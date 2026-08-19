@@ -180,9 +180,13 @@ describe('ダイジェストのボタン押下', () => {
   });
 });
 
-/** クリップ直後の返信に付くボタン（ADR 0015）。ダイジェストとは差し替え方が違う。 */
+/**
+ * クリップ直後の返信に付くボタン（ADR 0015）。
+ * ダイジェストと同じ`action_id`・同じ組み直しで、押された組がメッセージから消える。
+ */
 describe('返信のボタン押下', () => {
-  const REPLY = '要するにQueueで分けろという話よ。<https://github.com/example/clips/blob/main/a.md|GitHub>に置いたわ。';
+  const REPLY =
+    '要するにQueueで分けろという話よ。<https://github.com/example/clips/blob/main/a.md|GitHub>に置いたわ。';
 
   function replyPress(path: string, clips: { path: string; title: string }[]) {
     return {
@@ -195,7 +199,7 @@ describe('返信のボタン押下', () => {
         text: REPLY,
         blocks: clipReplyBlocks(REPLY, clips),
       },
-      actions: [{ type: 'button', action_id: 'dismiss_thread_clip', value: path }],
+      actions: [{ type: 'button', action_id: 'dismiss_clip', value: path }],
     };
   }
 
@@ -215,42 +219,35 @@ describe('返信のボタン押下', () => {
     await pressReply(CLIP_PATH, [{ path: CLIP_PATH, title: '記事' }]);
 
     expect((await dismissedAt(CLIP_PATH))?.dismissed_at).not.toBeNull();
-    // 返信本文はそのまま。ボタンだけが結果の一行に変わる。
+    // 本文はクリップの組に属さないので残り、ボタンだけが消える。
     expect(updates[0]?.blocks).toEqual([
       { type: 'section', text: { type: 'mrkdwn', text: REPLY } },
-      {
-        type: 'context',
-        block_id: 'dismiss-0',
-        elements: [{ type: 'plain_text', text: '片付けた' }],
-      },
     ]);
   });
 
-  it('touches only the button that was pressed', async () => {
+  it('keeps the buttons of the clips that are still waiting', async () => {
     await seed();
     const updates = mockSlack();
-    const clips = [
+
+    await pressReply(CLIP_PATH, [
       { path: CLIP_PATH, title: '記事' },
       { path: OTHER_PATH, title: '別の記事' },
-    ];
+    ]);
 
-    await pressReply(CLIP_PATH, clips);
-
-    // 押していない方のボタンは押せるまま残る。
     expect((await dismissedAt(OTHER_PATH))?.dismissed_at).toBeNull();
     expect(JSON.stringify(updates[0]?.blocks)).toContain(OTHER_PATH);
-    expect(JSON.stringify(updates[0]?.blocks)).not.toContain(`"value":"${CLIP_PATH}"`);
+    expect(JSON.stringify(updates[0]?.blocks)).not.toContain(CLIP_PATH);
   });
 
   /**
    * GitHubへは保存できたがD1の記録に失敗すると、ボタンはあるのに台帳に行が無い。
-   * ADR 0010が「検出する手段を持たない」と書いた不整合が、ここで初めて目に見える。
+   * D1が返さない以上、片付いたものと区別せずに消す。ダイジェストの孤児行と同じ扱いである。
    */
-  it('says so when the clip is not in the ledger', async () => {
+  it('drops the button of a clip that is not in the ledger', async () => {
     const updates = mockSlack();
 
     await pressReply(CLIP_PATH, [{ path: CLIP_PATH, title: '記事' }]);
 
-    expect(JSON.stringify(updates[0]?.blocks)).toContain('台帳にこのクリップが無い');
+    expect(JSON.stringify(updates[0]?.blocks)).not.toContain(CLIP_PATH);
   });
 });

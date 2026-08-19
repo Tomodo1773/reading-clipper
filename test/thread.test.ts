@@ -16,7 +16,7 @@ describe('ThreadAgent', () => {
     const stub = thread('D123:turn-carry');
     expect(await stub.load('Ev1')).toEqual({ history: [], saved: [] });
 
-    await stub.save('Ev1', [greeting, answer], 'こんばんは。今日は何を読むの？');
+    await stub.save('Ev1', [greeting, answer], 'こんばんは。今日は何を読むの？', []);
 
     const next = await stub.load('Ev2');
     expect(next.history).toEqual([greeting, answer]);
@@ -26,13 +26,13 @@ describe('ThreadAgent', () => {
 
   it('returns the stored reply for an event it already handled', async () => {
     const stub = thread('D123:redelivery');
-    await stub.save('EvDup', [greeting, answer], '一度だけ答えるわ。');
+    await stub.save('EvDup', [greeting, answer], '一度だけ答えるわ。', []);
 
     expect((await stub.load('EvDup')).reply).toBe('一度だけ答えるわ。');
   });
 
   it('keeps threads separate', async () => {
-    await thread('D123:a').save('Ev1', [greeting], 'はじめまして。');
+    await thread('D123:a').save('Ev1', [greeting], 'はじめまして。', []);
 
     expect(await thread('D123:b').load('Ev1')).toEqual({ history: [], saved: [] });
   });

@@ -144,12 +144,12 @@ describe('queue handler', () => {
       { type: 'section', text: { type: 'mrkdwn', text: '保存しておいたわ。' } },
       {
         type: 'actions',
-        block_id: 'dismiss-0',
+        block_id: 'clip-0-act',
         elements: [
           {
             type: 'button',
             text: { type: 'plain_text', text: '片付ける' },
-            action_id: 'dismiss_thread_clip',
+            action_id: 'dismiss_clip',
             value: CLIP.path,
           },
         ],

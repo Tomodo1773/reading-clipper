@@ -76,7 +76,7 @@ export class ThreadAgent extends DurableObject<Env> {
   }
 
   /** 1ターンぶんをまとめて書く。途中で落ちたターンは何も残さない。 */
-  save(eventId: string, appended: string[], reply: string, saved: SavedClip[] = []): void {
+  save(eventId: string, appended: string[], reply: string, saved: SavedClip[]): void {
     const at = new Date().toISOString();
     this.append(appended);
     this.ctx.storage.sql.exec(

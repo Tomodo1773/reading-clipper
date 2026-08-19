@@ -1,21 +1,9 @@
 import type { ModelMessage } from 'ai';
 import { type AnyMessageBlock, type SectionBlock, SlackAPIClient } from 'slack-edge';
-import {
-  type DigestClip,
-  markDigestShown,
-  selectDigestClips,
-  selectUndismissed,
-  setClipDismissed,
-} from './clips';
-import { DISMISS_LABEL } from './dismiss';
+import { type DigestClip, markDigestShown, selectDigestClips } from './clips';
+import { clipBlockId, dismissActionBlock } from './dismiss';
 import type { Env } from './types';
 import { fetchWithTimeout } from './utils';
-
-/**
- * ダイジェストの行に付くボタン。押下はAIを経由せず直接D1を更新する（ADR 0010）。
- * `action_id`と`value`で意図が確定して届くものを、自然文へ落として再解釈させない。
- */
-export const DISMISS_ACTION_ID = 'dismiss_clip';
 
 /** Slackの`image_url`の上限。Qiitaの自動生成OGPは2600文字を超える実例がある。 */
 const MAX_IMAGE_URL_CHARS = 3000;
@@ -62,21 +50,21 @@ function clipHref(env: Env, clip: DigestClip): string {
   return `https://github.com/${env.GITHUB_REPO}/blob/main/${encoded}`;
 }
 
-/** 「未読」と呼ばない。記録しているのは片付けたかどうかだけである（ADR 0010）。 */
-function headBlocks(remaining: number): AnyMessageBlock[] {
-  if (remaining === 0) {
-    return [
-      { type: 'header', text: { type: 'plain_text', text: 'まだ片付いていないクリップ' } },
-      { type: 'section', text: { type: 'mrkdwn', text: 'いまは残っていないわ。' } },
-    ];
+/**
+ * 「未読」と呼ばない。記録しているのは片付けたかどうかだけである（ADR 0010）。
+ *
+ * 件数は持たない。ボタンを押すたびに数え直すことになるうえ、投稿時点の件数は
+ * 通知に出る`digestText`が既に持っている（ADR 0015）。
+ */
+function headBlocks(count: number): AnyMessageBlock[] {
+  const header: AnyMessageBlock = {
+    type: 'header',
+    text: { type: 'plain_text', text: 'まだ片付いていないクリップ' },
+  };
+  if (count === 0) {
+    return [header, { type: 'section', text: { type: 'mrkdwn', text: 'いまは残っていないわ。' } }];
   }
-  return [
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: `まだ片付いていないクリップ ${remaining}件` },
-    },
-    { type: 'divider' },
-  ];
+  return [header, { type: 'divider' }];
 }
 
 /**
@@ -88,7 +76,7 @@ function headBlocks(remaining: number): AnyMessageBlock[] {
  * ファイル名が記事タイトルそのままなので、`block_id`の255文字上限を超えうる。
  */
 function clipBlocks(env: Env, clip: DigestClip, index: number): AnyMessageBlock[] {
-  const id = `clip-${index}`;
+  const id = clipBlockId(index);
   const title = clipTitle(clip);
   const link = `*<${escapeMrkdwn(clipHref(env, clip))}|${escapeMrkdwn(title)}>*`;
   const excerpt = clip.excerpt ? `\n${escapeMrkdwn(clip.excerpt)}` : '';
@@ -104,18 +92,7 @@ function clipBlocks(env: Env, clip: DigestClip, index: number): AnyMessageBlock[
   }
   return [
     section,
-    {
-      type: 'actions',
-      block_id: `${id}-act`,
-      elements: [
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: DISMISS_LABEL },
-          action_id: DISMISS_ACTION_ID,
-          value: clip.path,
-        },
-      ],
-    },
+    dismissActionBlock(index, clip.path),
     // mrkdwnにするとSlackがホスト名をリンクへ変えて`<http://qiita.com|qiita.com>`になる。
     // ここに書式は要らないので、自動リンクの効かないplain_textで出す。
     ...(meta
@@ -175,54 +152,6 @@ async function isFetchableImage(url: string): Promise<boolean> {
   }
 }
 
-interface ClipGroup {
-  path: string;
-  blocks: AnyMessageBlock[];
-}
-
-/** ボタンを持つ`actions`ブロックからパスを取り出す。 */
-function dismissValue(block: AnyMessageBlock): string | undefined {
-  if (block.type !== 'actions') return undefined;
-  for (const element of block.elements) {
-    if (element.type === 'button' && element.action_id === DISMISS_ACTION_ID) return element.value;
-  }
-  return undefined;
-}
-
-/**
- * メッセージのblocksから、クリップ1件ぶんのブロックの組とそのパスを取り出す。
- *
- * 1件が複数ブロックに散るため、`block_id`の接頭辞で組をまとめる。
- * パスはボタンの`value`にしか無いので、組の中から拾う。
- */
-function clipGroups(blocks: AnyMessageBlock[]): ClipGroup[] {
-  const groups = new Map<string, ClipGroup>();
-  for (const block of blocks) {
-    const id = block.block_id?.match(/^(clip-\d+)(?:-|$)/)?.[1];
-    if (!id) continue;
-    const group = groups.get(id) ?? { path: '', blocks: [] };
-    group.blocks.push(block);
-    group.path = dismissValue(block) ?? group.path;
-    groups.set(id, group);
-  }
-  return [...groups.values()].filter((group) => group.path);
-}
-
-/**
- * 残す組だけにして組み直す。
- *
- * 行そのものはSlackのpayloadに入っているものをそのまま使い、作り直さない。
- * D1から作り直すと、ボタンを1回押すたびに残り全件のサムネイルを取り直すことになる。
- * 見出しだけは残り件数を持つので付け替える。
- */
-export function keepClipBlocks(
-  blocks: AnyMessageBlock[],
-  keep: ReadonlySet<string>,
-): AnyMessageBlock[] {
-  const kept = clipGroups(blocks).filter((group) => keep.has(group.path));
-  return [...headBlocks(kept.length), ...kept.flatMap((group) => group.blocks)];
-}
-
 /**
  * ダイジェストの内容をスレッドの会話へ残す（ADR 0010）。
  * これがあるので「3番目のやつ片付けて」と言われた対象をAIが特定でき、一覧用のツールが要らない。
@@ -267,29 +196,4 @@ export async function runWeeklyDigest(env: Env, now = new Date()): Promise<void>
   if (shown.length === 0) return;
   const thread = env.THREAD.get(env.THREAD.idFromName(`${channel}:${ts}`));
   await thread.append(digestTurn(shown).map((message) => JSON.stringify(message)));
-}
-
-/**
- * ボタンからのDismiss。D1を更新してから、まだ片付いていない行だけのメッセージへ差し替える。
- *
- * 押された行を落とすのではなくD1に問い直すのは、連続で押したときのため。
- * 2回目のpayloadは1回目の`chat.update`が届く前の`blocks`を含むので、
- * 差分で作ると片付けたばかりの行がボタンごと書き戻る。
- */
-export async function dismissDigestClip(
-  env: Env,
-  target: { path: string; channel: string; messageTs: string; blocks: AnyMessageBlock[] },
-): Promise<void> {
-  await setClipDismissed(env, target.path, true, new Date().toISOString());
-  const groups = clipGroups(target.blocks);
-  const alive = await selectUndismissed(
-    env,
-    groups.map((group) => group.path),
-  );
-  await new SlackAPIClient(env.SLACK_BOT_TOKEN).chat.update({
-    channel: target.channel,
-    ts: target.messageTs,
-    text: digestText(groups.filter((group) => alive.has(group.path)).length),
-    blocks: keepClipBlocks(target.blocks, alive),
-  });
 }

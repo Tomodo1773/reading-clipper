@@ -26,8 +26,8 @@
 | `src/github.ts` | GitHub App認証とContents API |
 | `src/markdown.ts` | 保存するMarkdownの組み立て |
 | `src/clips.ts` | D1へのアクセス。読書状態の注釈レイヤーです |
-| `src/digest.ts` | 週次ダイジェストの組み立てとDismiss |
-| `src/dismiss.ts` | クリップ直後の返信に付けるボタンの組み立てと、その押下処理 |
+| `src/digest.ts` | 週次ダイジェストの組み立て |
+| `src/dismiss.ts` | 片付けのボタンと押下処理。ダイジェストの行と、クリップ直後の返信で共通です |
 | `src/errors.ts` | `ClipError` と `ProcessingStage`。失敗をどの段階のものとして扱うか |
 | `src/excerpt.ts` / `src/html.ts` | Worker側とNode側（バックフィル）の両方から呼びます。同じ入力から必ず同じ結果を出す必要があるため、**何もimportしない**制約があります |
 
