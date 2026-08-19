@@ -30,6 +30,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存。
 - **その場で、または週次ダイジェストで片付け**
   保存した直後の返信にボタンが付き、読まないと決めた記事をその場で片付けられる。まだ片付けていないクリップは毎週日曜9時（JST）に最大7件Slackへ再掲され、こちらもボタンまたはスレッド内の自然文で片付けられる。
+- **壊れた保存はチャットから削除**
+  本文が取れず概要だけが保存されてしまった記事は、Slackで題名やURLの一部を挙げれば消せる。AIが保存済みのクリップを検索して対象を特定し、GitHubのファイルと記録の両方を消す。
 
 ## 主な特徴・設計上のポイント
 
@@ -136,6 +138,7 @@ pnpm wrangler deploy --dry-run
 - XはAPIから取得できる公開Postだけを対象とし、protected contentは保存しない。
 - 週次ダイジェストは「読んだか」ではなく「片付けたか」だけを管理。
 - 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しない。
+- 削除は既定ブランチの先頭からファイルを消すだけで、本文はGitの履歴に残る。取り消しは`git revert`で行う。
 
 ## 設計判断
 
@@ -146,3 +149,4 @@ pnpm wrangler deploy --dry-run
 - [週次ダイジェストと片付け状態をD1で管理する](docs/adr/0010-weekly-digest-and-dismiss-bit.md)
 - [本文を読んでからAIが保存対象を決める](docs/adr/0012-load-content-then-save-loaded.md)
 - [クリップ直後の返信にDismissボタンを出す](docs/adr/0015-dismiss-button-on-the-clip-reply.md)
+- [クリップの削除を検索とターン内の参照番号で組む](docs/adr/0016-delete-clip-via-search-and-turn-scoped-ref.md)

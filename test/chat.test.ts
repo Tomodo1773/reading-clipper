@@ -2,6 +2,7 @@ import type { ModelMessage } from 'ai';
 import { env as testEnv } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runChatTurn } from '../src/chat';
+import { recordClip } from '../src/clips';
 import { ClipError } from '../src/errors';
 import { resetGitHubTokenCache } from '../src/github';
 import { base64ToUtf8 } from '../src/utils';
@@ -33,6 +34,9 @@ interface Recorded {
   savedMarkdown: string;
   /** 本文の取得が何回走ったか。ロードと保存で二重に取っていないことを見る。 */
   articleFetches: number;
+  /** GitHubへDELETEが飛んだパス。飛んでいなければ空のまま（ADR 0016）。 */
+  deletedPath: string;
+  deletedSha: string;
 }
 
 /**
@@ -41,22 +45,25 @@ interface Recorded {
  *
  * `extraRoutes` は既定の経路より先に引く。既定はQiitaの1記事だけを用意しているので、
  * 別のサイトを出したいテストはここへ足す（テストごとに`fetch`の分岐を書き直さない）。
+ * GitHubのContents APIは同じURLへGETとDELETEの両方が飛ぶため、メソッドも渡す。
  */
 function mockWorld(
   modelReplies: Response[],
-  extraRoutes: (url: string) => Response | undefined = () => undefined,
+  extraRoutes: (url: string, method: string) => Response | undefined = () => undefined,
 ): Recorded {
   const recorded: Recorded = {
     modelBodies: [],
     savedPath: '',
     savedMarkdown: '',
     articleFetches: 0,
+    deletedPath: '',
+    deletedSha: '',
   };
   let modelCall = 0;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
-    const extra = extraRoutes(url);
+    const extra = extraRoutes(url, method);
     if (extra) return extra;
     if (url.includes('/app/installations/') && method === 'POST') {
       return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
@@ -85,6 +92,11 @@ function mockWorld(
         201,
       );
     }
+    if (url.includes('/repos/example/clips/contents/') && method === 'DELETE') {
+      recorded.deletedPath = decodeURIComponent(url.split('/contents/')[1] ?? '');
+      recorded.deletedSha = JSON.parse(String(init?.body)).sha;
+      return jsonResponse({ commit: { sha: 'delete-commit' } });
+    }
     throw new Error(`unexpected request: ${method} ${url}`);
   });
   return recorded;
@@ -105,17 +117,19 @@ function toolOutput(messages: ModelMessage[], toolName: string): Record<string, 
 }
 
 /** Gemini 3系はfunctionCallにthoughtSignatureを添えて返す。 */
-function toolCallReply(name: string, url: string): Response {
+function toolCallReply(name: string, args: Record<string, unknown>): Response {
   return modelResponse([
     {
-      functionCall: { name, args: { url } },
+      functionCall: { name, args },
       thoughtSignature: 'sig-abc',
     },
   ]);
 }
 
-const loadCallReply = (url: string): Response => toolCallReply('load_content', url);
-const saveCallReply = (url: string): Response => toolCallReply('save_loaded', url);
+const loadCallReply = (url: string): Response => toolCallReply('load_content', { url });
+const saveCallReply = (url: string): Response => toolCallReply('save_loaded', { url });
+const findCallReply = (query: string): Response => toolCallReply('find_clips', { query });
+const deleteCallReply = (ref: number): Response => toolCallReply('delete_clip', { ref });
 
 /** Geminiがサーバー側で検索を実行したときの応答。1回のgenerateContentに全部入る。 */
 function groundedReply(text: string): Response {
@@ -521,5 +535,143 @@ describe('chat turn', () => {
     expect(toolOutput(turn.appended, 'load_content')).toEqual({ loaded: false, failed_at: 'fetch' });
     expect(putCalled).toBe(false);
     expect(turn.reply).toContain('何も残していない');
+  });
+});
+
+/**
+ * 削除の経路（ADR 0016）。
+ *
+ * ここで確かめるのは、モデルの言い分ではなくツールが実際に何をしたかである。
+ * GitHubへDELETEが飛んだか、台帳の行が消えたか、失敗したときに片方だけ消えていないか。
+ */
+describe('deleting a clip', () => {
+  const CLIP_PATH = 'clips/中身の無い記事.md';
+
+  /** GitHubにファイルが在る世界。GETがshaを返し、DELETEはmockWorldの既定が受ける。 */
+  const fileExists = (url: string, method: string): Response | undefined =>
+    url.includes('/repos/example/clips/contents/') && method === 'GET'
+      ? jsonResponse({
+          sha: 'old-sha',
+          html_url: 'https://github.com/example/clips/blob/main/clip.md',
+        })
+      : undefined;
+
+  async function seedClip(): Promise<void> {
+    await recordClip(makeEnv(), {
+      path: CLIP_PATH,
+      url: 'https://example.com/broken',
+      title: '中身の無い記事',
+      excerpt: '概要しか無い',
+      clippedAt: '2026-08-14T00:00:00.000Z',
+    });
+  }
+
+  const countClips = async (): Promise<number> =>
+    ((await testEnv.CLIPS.prepare('SELECT COUNT(*) AS n FROM clips').first<{ n: number }>())?.n ?? -1);
+
+  it('searches first, then deletes the file and the ledger row', async () => {
+    await seedClip();
+    const recorded = mockWorld(
+      [findCallReply('中身の無い'), deleteCallReply(1), modelResponse([{ text: '消しておいたわ。' }])],
+      fileExists,
+    );
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: '中身の無い記事、消して',
+      receivedAt: RECEIVED_AT,
+    });
+
+    // 検索が返すのは、モデルが組み立てられないターン内限定の番号である。
+    expect(toolOutput(turn.appended, 'find_clips')).toEqual({
+      found: [
+        {
+          ref: 1,
+          title: '中身の無い記事',
+          url: 'https://example.com/broken',
+          path: CLIP_PATH,
+          clipped_at: '2026-08-14T00:00:00.000Z',
+          dismissed: false,
+        },
+      ],
+    });
+    expect(toolOutput(turn.appended, 'delete_clip')).toEqual({
+      deleted: true,
+      title: '中身の無い記事',
+      github: 'deleted',
+    });
+    // 引いたshaをそのまま返す。取り違えるとGitHubが409で拒否する。
+    expect(recorded.deletedPath).toBe(CLIP_PATH);
+    expect(recorded.deletedSha).toBe('old-sha');
+    expect(await countClips()).toBe(0);
+  });
+
+  it('refuses a ref it never handed out, without touching GitHub or the ledger', async () => {
+    await seedClip();
+    // 探さずにいきなり消そうとする。説明文ではなくターン内の対応表がこれを止める。
+    const recorded = mockWorld([deleteCallReply(7), modelResponse([{ text: 'まず探すわね。' }])], fileExists);
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: '中身の無い記事、消して',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(toolOutput(turn.appended, 'delete_clip')).toEqual({ deleted: false, unknown_ref: 7 });
+    expect(recorded.deletedPath).toBe('');
+    expect(await countClips()).toBe(1);
+  });
+
+  it('still clears the ledger row when the file is already gone from GitHub', async () => {
+    await seedClip();
+    // mockWorldの既定のGETは404。保存に失敗していたクリップの行がこれにあたる。
+    const recorded = mockWorld([
+      findCallReply('中身の無い'),
+      deleteCallReply(1),
+      modelResponse([{ text: 'ファイルはもう無かったわ。記録は消しておいた。' }]),
+    ]);
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: '中身の無い記事、消して',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(toolOutput(turn.appended, 'delete_clip')).toMatchObject({
+      deleted: true,
+      github: 'missing',
+    });
+    expect(recorded.deletedPath).toBe('');
+    expect(await countClips()).toBe(0);
+  });
+
+  it('keeps the ledger row when GitHub refuses the delete', async () => {
+    await seedClip();
+    // 片方だけ消えるのが最も悪い。ファイルが残っているなら行も残す。
+    mockWorld(
+      [
+        findCallReply('中身の無い'),
+        deleteCallReply(1),
+        modelResponse([{ text: '消せなかったわ。時間を置いて言ってちょうだい。' }]),
+      ],
+      (url, method) => {
+        if (!url.includes('/repos/example/clips/contents/')) return undefined;
+        if (method === 'GET') return fileExists(url, method);
+        return method === 'DELETE' ? jsonResponse({ message: 'boom' }, 500) : undefined;
+      },
+    );
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: '中身の無い記事、消して',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(toolOutput(turn.appended, 'delete_clip')).toEqual({ deleted: false, failed_at: 'github' });
+    expect(await countClips()).toBe(1);
   });
 });

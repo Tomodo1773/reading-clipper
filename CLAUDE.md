@@ -19,7 +19,7 @@
 | `src/index.ts` | Slack受付（slack-edge）、Queueへの登録、cronの入口。ここでは積むだけです |
 | `src/processor.ts` | Queue consumer。1ジョブの実行とエラーのステージ分類 |
 | `src/chat.ts` | AI SDKでのモデル呼び出し1ターン |
-| `src/tools.ts` | モデルへ渡すツール定義（読む／保存する） |
+| `src/tools.ts` | モデルへ渡すツール定義（読む／保存する／探す／消す） |
 | `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
 | `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / Firecrawl） |
 | `src/url.ts` | canonical化、種別判定、保存先パスの決定 |

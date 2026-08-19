@@ -1,11 +1,11 @@
 import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { recordClip, setClipDismissed } from './clips';
+import { deleteClip, type FoundClip, findClips, recordClip, setClipDismissed } from './clips';
 import { asClipError } from './errors';
 import { clipExcerpt } from './excerpt';
 import { loadContent } from './fetchers';
-import { getGitHubFile, putGitHubFile } from './github';
+import { deleteGitHubFile, getGitHubFile, putGitHubFile } from './github';
 import { renderClipMarkdown } from './markdown';
 import type { Env, FetchedContent } from './types';
 import { buildClipPath, canonicalizeUrl } from './url';
@@ -68,6 +68,19 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
    * 拒否してAIがロードし直すだけで壊れない。
    */
   const loaded = new Map<string, FetchedContent>();
+
+  /**
+   * このターンの検索で見つけたクリップの置き場（ADR 0016）。
+   *
+   * `delete_clip`が受け取るのはここへ振った番号だけで、パスは受け取らない。保存先パスは
+   * 記事タイトルそのものなので（ADR 0005 / 0013）、本文や検索結果に出てきた題名から
+   * モデルが実在するパスを組み立てられてしまう。番号なら組み立てようがない。
+   *
+   * `loaded`と同じくターンをまたぐと消えるが、その場合は`delete_clip`が拒否して
+   * `find_clips`からやり直すだけで壊れない。永続的なIDにしないのはこのためで、
+   * 番号が会話へ残ると「消す直前に台帳を引き直した」という保証が消える。
+   */
+  const foundClips = new Map<number, FoundClip>();
 
   return {
     /**
@@ -189,6 +202,113 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
           );
           return { updated: false, failed_at: clipError.stage };
         }
+      },
+    }),
+    /**
+     * 会話に出ていないクリップを特定するための検索（ADR 0016）。
+     *
+     * ADR 0010はダイジェストの投稿をスレッドへ書き込むことで一覧ツールを不要としたが、
+     * それは対象が必ず会話の中にあるという前提の上に立っている。壊れた保存に気づくのは
+     * 後日GitHubを眺めたときでもあり、そのとき対象は会話の中に無い。
+     */
+    find_clips: tool({
+      description: [
+        '保存済みのクリップを、題名やURLに含まれる語で探す。',
+        'どのクリップのことかを特定するために使う。会話にまだ出ていないクリップは、これで探さないと分からない。',
+        '結果のrefはdelete_clipへ渡すための番号で、いま返したものだけが有効。次のやり取りでは使えない。',
+        '片付け済みのクリップも結果に出る。dismissedがそれを示す。',
+        '見つからなければfoundが空になる。そのときは対象が無いということ。',
+      ].join(''),
+      inputSchema: z.object({
+        query: z.string().min(1).describe('題名やURLに含まれる語。1回につき1つ。'),
+      }),
+      execute: async ({ query }) => {
+        try {
+          const clips = await findClips(env, query);
+          return {
+            found: clips.map((clip) => {
+              // 番号は検索をまたいで通し番号にする。2回探しても前の結果が上書きされない。
+              const ref = foundClips.size + 1;
+              foundClips.set(ref, clip);
+              return {
+                ref,
+                // 題名を持たない行（バックフィル由来）は、パスが唯一の手掛かりになる。
+                title: clip.title ?? clip.path,
+                url: clip.url ?? undefined,
+                // set_clip_dismissedはパスで引くので、同じ検索から片付けへも繋げられるようにする。
+                path: clip.path,
+                clipped_at: clip.clippedAt,
+                dismissed: clip.dismissedAt !== null,
+              };
+            }),
+          };
+        } catch (error) {
+          const clipError = asClipError(error, 'clips');
+          console.warn(
+            JSON.stringify({
+              stage: clipError.stage,
+              message: clipError.message,
+              tool: 'find_clips',
+            }),
+          );
+          return { found: [], failed_at: clipError.stage };
+        }
+      },
+    }),
+    /**
+     * 保存そのものを無かったことにする（ADR 0016）。
+     *
+     * `set_clip_dismissed`と違い、これはGitHubを書き換える。ADR 0010がAIにD1を触らせる
+     * 根拠とした4条件のうち「GitHubを書き換えない」が崩れるため、可逆性はGitの履歴が担う。
+     * 消えるのはHEADからだけで、本文は1つ前のコミットに残る。
+     */
+    delete_clip: tool({
+      description: [
+        '保存済みのクリップを、GitHubのファイルごと消す。片付けとは違い、保存を無かったことにする。',
+        '本文が入っていない、記事の概要しか保存されていない、記事ではない別のページが保存されている、',
+        'といったときに使う。読まないと決めただけならset_clip_dismissedを使うこと。',
+        'refはfind_clipsがいま返した番号だけを渡す。パスや題名では消せないので、先にfind_clipsで探すこと。',
+        '1回につき1件。',
+      ].join(''),
+      inputSchema: z.object({
+        ref: z.number().int().describe('find_clipsが返したref。1回につき1件。'),
+      }),
+      execute: async ({ ref }) => {
+        // 順序の唯一の保証。説明文は守らせるための働きかけでしかなく、実際に止めるのはここ。
+        // 探していないものは消せないので、モデルが組み立てた題名からパスへは届かない。
+        const clip = foundClips.get(ref);
+        if (!clip) return { deleted: false, unknown_ref: ref };
+        let github: 'deleted' | 'missing';
+        try {
+          // GitHubを先に消す。逆にするとD1だけ消えてゴミファイルが残り、
+          // ダイジェストに二度と出てこない＝気づけないゴミになる（ADR 0016）。
+          const existing = await getGitHubFile(env, clip.path);
+          if (existing) await deleteGitHubFile(env, clip.path, existing.sha);
+          github = existing ? 'deleted' : 'missing';
+        } catch (error) {
+          const clipError = asClipError(error, 'github');
+          console.warn(
+            JSON.stringify({
+              stage: clipError.stage,
+              status: clipError.status,
+              message: clipError.message,
+              tool: 'delete_clip',
+            }),
+          );
+          // ファイルが残っている以上、台帳の行も残す。片方だけ消して黙るのが一番悪い。
+          return { deleted: false, failed_at: clipError.stage };
+        }
+        // D1は台帳ではなく注釈レイヤーなので、消せなくてもファイルは既に消えている（ADR 0010）。
+        // 残った行はダイジェストに1度出て、「片付ける」を1回押せば終わる。
+        try {
+          await deleteClip(env, clip.path);
+        } catch (error) {
+          const clipError = asClipError(error, 'clips');
+          console.warn(
+            JSON.stringify({ stage: clipError.stage, message: clipError.message, path: clip.path }),
+          );
+        }
+        return { deleted: true, title: clip.title ?? clip.path, github };
       },
     }),
   };
