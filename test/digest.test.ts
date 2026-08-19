@@ -1,7 +1,8 @@
 import { env as testEnv } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DigestClip } from '../src/clips';
-import { digestBlocks, keepClipBlocks, runWeeklyDigest } from '../src/digest';
+import { digestBlocks, runWeeklyDigest } from '../src/digest';
+import { keepAliveClips } from '../src/dismiss';
 import type { ThreadAgent } from '../src/thread';
 import { jsonResponse, makeEnv, readSlackCall, resetClips } from './helpers';
 
@@ -150,7 +151,9 @@ describe('weekly digest', () => {
     expect(posted.channel).toBe('D123');
     // 見出しと区切り、そのあとクリップごとに section + actions + context の3ブロック。
     expect(posted.blocks).toHaveLength(8);
-    expect(JSON.stringify(posted.blocks[0])).toContain('2件');
+    // 件数は見出しに持たない。押すたびに数え直すことになるため（ADR 0015）。
+    expect(slack.bodies['chat.postMessage']).toMatchObject({ text: '片付いていないクリップが2件' });
+    expect(JSON.stringify(posted.blocks[0])).not.toContain('2件');
 
     const groups = groupsOf(posted.blocks);
     expect(Object.keys(groups)).toEqual(['clip-0', 'clip-1']);
@@ -278,18 +281,17 @@ describe('weekly digest', () => {
   });
 });
 
-describe('keepClipBlocks', () => {
-  it('keeps only the rows that are still waiting and counts down the heading', () => {
+describe('keepAliveClips', () => {
+  it('keeps only the rows that are still waiting', () => {
     const blocks = digestBlocks(makeEnv(), [
       digestClip({ path: 'clips/a.md', url: 'https://example.com/a' }),
       digestClip({ path: 'clips/b.md', url: 'https://example.com/b' }),
     ]);
 
-    const remaining = keepClipBlocks(blocks, new Set(['clips/b.md']));
+    const remaining = keepAliveClips(blocks, new Set(['clips/b.md']));
 
-    // 見出しと区切り、そのあと残った1件ぶんの3ブロック。
+    // 見出しと区切りはクリップの組に属さないので、そのまま残る。
     expect(remaining).toHaveLength(5);
-    expect(JSON.stringify(remaining[0])).toContain('1件');
     expect(JSON.stringify(remaining)).toContain('clips/b.md');
     expect(JSON.stringify(remaining)).not.toContain('clips/a.md');
   });
@@ -304,7 +306,7 @@ describe('keepClipBlocks', () => {
       }),
     ]);
 
-    const remaining = keepClipBlocks(blocks, new Set(['clips/b.md']));
+    const remaining = keepAliveClips(blocks, new Set(['clips/b.md']));
 
     expect(remaining.map((block) => block.type)).toEqual([
       'header',
@@ -317,15 +319,16 @@ describe('keepClipBlocks', () => {
     expect(JSON.stringify(remaining)).toContain('zenn.dev');
   });
 
-  it('leaves only the heading when the last row goes', () => {
+  it('leaves the heading when the last row goes', () => {
     const blocks = digestBlocks(makeEnv(), [digestClip({ path: 'clips/a.md' })]);
 
-    const remaining = keepClipBlocks(blocks, new Set());
+    const remaining = keepAliveClips(blocks, new Set());
 
-    expect(remaining).toHaveLength(2);
-    expect(JSON.stringify(remaining)).toContain('いまは残っていない');
+    expect(remaining.map((block) => block.type)).toEqual(['header', 'divider']);
   });
+});
 
+describe('digestBlocks', () => {
   it('escapes a pipe in the article URL so the link does not break', () => {
     const blocks = digestBlocks(makeEnv(), [
       digestClip({ path: 'clips/記事.md', url: 'https://example.com/a?x=b|c' }),
