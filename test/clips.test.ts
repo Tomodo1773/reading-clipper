@@ -7,6 +7,7 @@ import {
   markDigestShown,
   recordClip,
   selectDigestClips,
+  selectRecentClips,
   selectUndismissed,
   setClipDismissed,
 } from '../src/clips';
@@ -271,6 +272,36 @@ describe('findClips', () => {
     );
 
     expect(await findClips(env, 'Worker')).toHaveLength(8);
+  });
+});
+
+describe('selectRecentClips', () => {
+  it('returns at most 20 clips newest first, including dismissed clips', async () => {
+    await seed(
+      Array.from({ length: 22 }, (_unused, index) => ({
+        path: `clips/${String(index).padStart(2, '0')}.md`,
+        clippedAt: `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+        ...(index === 21 ? { dismissedAt: '2026-08-23T00:00:00.000Z' } : {}),
+      })),
+    );
+
+    const recent = await selectRecentClips(env);
+
+    expect(recent).toHaveLength(20);
+    expect(recent[0]?.path).toBe('clips/21.md');
+    expect(recent.at(-1)?.path).toBe('clips/02.md');
+  });
+
+  it('uses the path as a stable tie breaker', async () => {
+    await seed([
+      { path: 'clips/b.md', clippedAt: '2026-08-01T00:00:00.000Z' },
+      { path: 'clips/a.md', clippedAt: '2026-08-01T00:00:00.000Z' },
+    ]);
+
+    expect((await selectRecentClips(env)).map((clip) => clip.path)).toEqual([
+      'clips/a.md',
+      'clips/b.md',
+    ]);
   });
 });
 

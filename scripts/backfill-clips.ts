@@ -18,6 +18,7 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { isGeneratedClipIndex } from '../src/clip-index-format.ts';
 import { clipExcerpt } from '../src/excerpt.ts';
 import { findOgImage } from '../src/html.ts';
 
@@ -128,10 +129,13 @@ const files = await markdownFiles(clipsDir).catch(() => {
 
 const clips: Clip[] = [];
 for (const file of files) {
-  const { fields, body } = splitFrontMatter(await readFile(file, 'utf8'));
+  const source = await readFile(file, 'utf8');
+  const path = `clips/${relative(clipsDir, file).split(sep).join('/')}`;
+  if (isGeneratedClipIndex(path, source)) continue;
+  const { fields, body } = splitFrontMatter(source);
   clips.push({
     // D1のキーはリポジトリ内のパス。Windowsの`\`はここで`/`へ寄せる。
-    path: `clips/${relative(clipsDir, file).split(sep).join('/')}`,
+    path,
     url: fields.source_url,
     title: fields.title,
     excerpt: clipExcerpt(body, fields.title),

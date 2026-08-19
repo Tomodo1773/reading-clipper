@@ -4,6 +4,7 @@ import {
   asRecord,
   assertOk,
   base64ToBytes,
+  base64ToUtf8,
   bytesToBase64Url,
   fetchWithTimeout,
   stringField,
@@ -26,6 +27,15 @@ export interface GitHubFile {
   path: string;
   sha: string;
   htmlUrl: string;
+}
+
+export interface GitHubTextFile extends GitHubFile {
+  content: string;
+}
+
+export interface PutGitHubFileOptions {
+  sha?: string;
+  message?: string;
 }
 
 function privateKeyDer(pemValue: string): Uint8Array {
@@ -141,7 +151,10 @@ function contentsUrl(repo: string, path: string): string {
   return `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${encodedPath}`;
 }
 
-export async function getGitHubFile(env: Env, path: string): Promise<GitHubFile | undefined> {
+async function getGitHubFilePayload(
+  env: Env,
+  path: string,
+): Promise<Record<string, unknown> | undefined> {
   const token = await getInstallationToken(env);
   const response = await fetchWithTimeout(
     contentsUrl(env.GITHUB_REPO, path),
@@ -152,6 +165,11 @@ export async function getGitHubFile(env: Env, path: string): Promise<GitHubFile 
   if (response.status === 404) return undefined;
   assertOk(response, 'github');
   const payload = asRecord(await response.json());
+  if (!payload) throw new ClipError('GitHub content response was invalid', 'github', true);
+  return payload;
+}
+
+function githubFile(payload: Record<string, unknown>, path: string): GitHubFile {
   const sha = stringField(payload, 'sha');
   const htmlUrl = stringField(payload, 'html_url');
   if (!sha || !htmlUrl) {
@@ -160,12 +178,40 @@ export async function getGitHubFile(env: Env, path: string): Promise<GitHubFile 
   return { path, sha, htmlUrl };
 }
 
+/** shaとURLだけを読む。記事本文はデコードしない。 */
+export async function getGitHubFile(env: Env, path: string): Promise<GitHubFile | undefined> {
+  const payload = await getGitHubFilePayload(env, path);
+  return payload ? githubFile(payload, path) : undefined;
+}
+
+/** 所有マーカーなど本文そのものを調べる用途だけで使う。 */
+export async function getGitHubTextFile(
+  env: Env,
+  path: string,
+): Promise<GitHubTextFile | undefined> {
+  const payload = await getGitHubFilePayload(env, path);
+  if (!payload) return undefined;
+  const file = githubFile(payload, path);
+  const encodedContent = stringField(payload, 'content');
+  if (stringField(payload, 'encoding') !== 'base64' || !encodedContent) {
+    throw new ClipError('GitHub text content response was invalid', 'github', true);
+  }
+  try {
+    return { ...file, content: base64ToUtf8(encodedContent) };
+  } catch (error) {
+    throw new ClipError('GitHub text content could not be decoded', 'github', true, undefined, {
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+}
+
 export async function putGitHubFile(
   env: Env,
   path: string,
   content: string,
-  sha?: string,
+  options: PutGitHubFileOptions = {},
 ): Promise<GitHubFile> {
+  const { message, sha } = options;
   const token = await getInstallationToken(env);
   const response = await fetchWithTimeout(
     contentsUrl(env.GITHUB_REPO, path),
@@ -173,7 +219,7 @@ export async function putGitHubFile(
       method: 'PUT',
       headers: { ...githubHeaders(token), 'content-type': 'application/json' },
       body: JSON.stringify({
-        message: sha ? `Update clip: ${path}` : `Add clip: ${path}`,
+        message: message ?? (sha ? `Update clip: ${path}` : `Add clip: ${path}`),
         content: utf8ToBase64(content),
         ...(sha ? { sha } : {}),
       }),

@@ -28,6 +28,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   保存時に1〜2文で要約し、続けて質問すると取得済みの本文を踏まえて回答。同じスレッドでは記事を取り直さない。
 - **MarkdownをGitHubへ保存**
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存。
+- **最近保存したクリップをGitHubで一覧**
+  保存先の`clips/README.md`へ最新20件を新しい順で自動表示。記事のファイル名は日付で長くせず、タイトルのまま保つ。
 - **その場で、または週次ダイジェストで片付け**
   保存した直後の返信にボタンが付き、読まないと決めた記事をその場で片付けられる。まだ片付けていないクリップは毎週日曜9時（JST）に最大7件Slackへ再掲され、こちらもボタンまたはスレッド内の自然文で片付けられる。
 - **壊れた保存はチャットから削除**
@@ -150,3 +152,4 @@ pnpm wrangler deploy --dry-run
 - [本文を読んでからAIが保存対象を決める](docs/adr/0012-load-content-then-save-loaded.md)
 - [クリップ直後の返信にDismissボタンを出す](docs/adr/0015-dismiss-button-on-the-clip-reply.md)
 - [クリップの削除を検索とターン内の参照番号で組む](docs/adr/0016-delete-clip-via-search-and-turn-scoped-ref.md)
+- [フラットな保存構造と新着順の表示を分離する](docs/adr/0017-generated-recent-clip-index.md)
