@@ -1,9 +1,15 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { APICallError } from '@ai-sdk/provider';
-import { generateText, type ModelMessage, RetryError, stepCountIs } from 'ai';
+import {
+  generateText,
+  type ModelMessage,
+  RetryError,
+  type StaticToolResult,
+  stepCountIs,
+} from 'ai';
 import { ClipError } from './errors';
 import { createTools } from './tools';
-import type { Env } from './types';
+import type { Env, SavedClip } from './types';
 
 const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通して「要するに何なのか」を教えてくれる、面倒見のいい年上のお姉さんです。SlackのDMで、一人の相手とだけ話しています。
 
@@ -98,13 +104,15 @@ function createProvider(env: Env) {
  *
  * 返す`appended`は、このターンで会話へ追加された分だけ。呼び出し側が成功後にまとめて永続化する。
  * 途中で投げた場合は何も追加されないので、Queueが再試行しても履歴が壊れない（ADR 0007）。
+ *
+ * `saved`はこのターンで保存できたクリップ。返信へ付けるボタンの有無はこれで決まる（ADR 0015）。
  */
 export async function runChatTurn(options: {
   env: Env;
   history: ModelMessage[];
   userText: string;
   receivedAt: string;
-}): Promise<{ appended: ModelMessage[]; reply: string }> {
+}): Promise<{ appended: ModelMessage[]; reply: string; saved: SavedClip[] }> {
   const userMessage: ModelMessage = { role: 'user', content: options.userText };
 
   const google = createProvider(options.env);
@@ -143,5 +151,33 @@ export async function runChatTurn(options: {
 
   const reply = result.text.trim();
   if (!reply) throw new ClipError('AI response contained no text', 'chat', true);
-  return { appended: [userMessage, ...result.responseMessages], reply };
+  return {
+    appended: [userMessage, ...result.responseMessages],
+    reply,
+    saved: savedClips(result.staticToolResults),
+  };
+}
+
+/**
+ * このターンで保存できたクリップを、返信の文面ではなく`save_loaded`の実行結果から取る。
+ *
+ * ここで読むのはモデルが書いた文字列ではなく、ツール自身が返したオブジェクトである。
+ * 保存が起きたかどうかは確定した構造として手元にあるので、文面を解析しない（ADR 0015）。
+ *
+ * 見るのは`staticToolResults`で、全ステップぶんが入る。`toolResults`は最終ステップだけなので、
+ * 保存の後にモデルがもう1手を挟んだターンで取りこぼす。
+ * 同じ記事を2回渡されても保存先は同じなので、パスで重ねる。
+ */
+function savedClips(
+  toolResults: StaticToolResult<ReturnType<typeof createTools>>[],
+): SavedClip[] {
+  const saved = new Map<string, SavedClip>();
+  for (const toolResult of toolResults) {
+    if (toolResult.toolName !== 'save_loaded') continue;
+    const output = toolResult.output;
+    // 失敗のときの戻り値には`path`が無い。保存できたものだけをボタンにする。
+    if (!output.saved || !('path' in output)) continue;
+    saved.set(output.path, { path: output.path, title: output.title });
+  }
+  return [...saved.values()];
 }

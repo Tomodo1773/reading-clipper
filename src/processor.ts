@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai';
 import { SlackAPIClient } from 'slack-edge';
 import { runChatTurn } from './chat';
+import { clipReplyBlocks } from './dismiss';
 import { asClipError, ClipError } from './errors';
 import type { ChatJob, Env } from './types';
 
@@ -39,7 +40,7 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
       env.THREAD.idFromName(`${job.slackChannel}:${job.slackThreadTs}`),
     );
     const stored = await thread.load(job.jobId);
-    let reply = stored.reply;
+    let { reply, saved } = stored;
     if (reply === undefined) {
       const turn = await runChatTurn({
         env,
@@ -51,13 +52,18 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
         job.jobId,
         turn.appended.map((message) => JSON.stringify(message)),
         turn.reply,
+        turn.saved,
       );
       reply = turn.reply;
+      saved = turn.saved;
     }
     await slack.chat.postMessage({
       channel: job.slackChannel,
       thread_ts: job.slackThreadTs,
+      // blocksを付けると本文はそちらが持つ。textは通知とblocksを読めないクライアント用に残す。
       text: reply,
+      // 保存が起きたターンの返信にだけボタンを添える（ADR 0015）。
+      ...(saved.length > 0 ? { blocks: clipReplyBlocks(reply, saved) } : {}),
       unfurl_links: false,
       unfurl_media: false,
     });

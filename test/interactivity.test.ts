@@ -1,6 +1,7 @@
 import { createExecutionContext, env as testEnv, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { digestBlocks } from '../src/digest';
+import { clipReplyBlocks } from '../src/dismiss';
 import worker from '../src/index';
 import {
   jsonResponse,
@@ -176,5 +177,80 @@ describe('ダイジェストのボタン押下', () => {
     await press();
 
     expect((await dismissedAt(CLIP_PATH))?.dismissed_at).not.toBeNull();
+  });
+});
+
+/** クリップ直後の返信に付くボタン（ADR 0015）。ダイジェストとは差し替え方が違う。 */
+describe('返信のボタン押下', () => {
+  const REPLY = '要するにQueueで分けろという話よ。<https://github.com/example/clips/blob/main/a.md|GitHub>に置いたわ。';
+
+  function replyPress(path: string, clips: { path: string; title: string }[]) {
+    return {
+      type: 'block_actions',
+      team: { id: 'T_ALLOWED' },
+      user: { id: 'U_ALLOWED' },
+      channel: { id: 'D123' },
+      message: {
+        ts: '1700000000.000300',
+        text: REPLY,
+        blocks: clipReplyBlocks(REPLY, clips),
+      },
+      actions: [{ type: 'button', action_id: 'dismiss_thread_clip', value: path }],
+    };
+  }
+
+  async function pressReply(
+    path: string,
+    clips: { path: string; title: string }[],
+  ): Promise<void> {
+    const ctx = createExecutionContext();
+    await worker.fetch(await signedInteractivityRequest(replyPress(path, clips)), makeEnv(), ctx);
+    await waitOnExecutionContext(ctx);
+  }
+
+  it('dismisses the clip and leaves the reply text in place', async () => {
+    await seed();
+    const updates = mockSlack();
+
+    await pressReply(CLIP_PATH, [{ path: CLIP_PATH, title: '記事' }]);
+
+    expect((await dismissedAt(CLIP_PATH))?.dismissed_at).not.toBeNull();
+    // 返信本文はそのまま。ボタンだけが結果の一行に変わる。
+    expect(updates[0]?.blocks).toEqual([
+      { type: 'section', text: { type: 'mrkdwn', text: REPLY } },
+      {
+        type: 'context',
+        block_id: 'dismiss-0',
+        elements: [{ type: 'plain_text', text: '片付けた' }],
+      },
+    ]);
+  });
+
+  it('touches only the button that was pressed', async () => {
+    await seed();
+    const updates = mockSlack();
+    const clips = [
+      { path: CLIP_PATH, title: '記事' },
+      { path: OTHER_PATH, title: '別の記事' },
+    ];
+
+    await pressReply(CLIP_PATH, clips);
+
+    // 押していない方のボタンは押せるまま残る。
+    expect((await dismissedAt(OTHER_PATH))?.dismissed_at).toBeNull();
+    expect(JSON.stringify(updates[0]?.blocks)).toContain(OTHER_PATH);
+    expect(JSON.stringify(updates[0]?.blocks)).not.toContain(`"value":"${CLIP_PATH}"`);
+  });
+
+  /**
+   * GitHubへは保存できたがD1の記録に失敗すると、ボタンはあるのに台帳に行が無い。
+   * ADR 0010が「検出する手段を持たない」と書いた不整合が、ここで初めて目に見える。
+   */
+  it('says so when the clip is not in the ledger', async () => {
+    const updates = mockSlack();
+
+    await pressReply(CLIP_PATH, [{ path: CLIP_PATH, title: '記事' }]);
+
+    expect(JSON.stringify(updates[0]?.blocks)).toContain('台帳にこのクリップが無い');
   });
 });

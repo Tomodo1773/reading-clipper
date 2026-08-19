@@ -190,6 +190,9 @@ describe('chat turn', () => {
 
     expect(turn.reply).toContain('要するに重い処理はQueueへ分けなさい');
 
+    // 返信へ付ける「片付ける」ボタンの材料。文面ではなくツールの実行結果から取る（ADR 0015）。
+    expect(turn.saved).toEqual([{ path: 'clips/Worker設計.md', title: 'Worker設計' }]);
+
     // 保存できたクリップは台帳にも入る。入らないと週次ダイジェストに永久に出てこない（ADR 0010）。
     expect(
       await testEnv.CLIPS.prepare('SELECT path, url FROM clips').first(),
@@ -230,6 +233,8 @@ describe('chat turn', () => {
       saved: false,
       not_loaded: 'https://qiita.com/alice/items/abc',
     });
+    // 保存できていないので、返信にボタンは付かない（ADR 0015）。
+    expect(turn.saved).toEqual([]);
     // 取得も保存も走らない。拒否だけして返す。
     expect(recorded.articleFetches).toBe(0);
     expect(recorded.savedPath).toBe('');
@@ -350,6 +355,8 @@ describe('chat turn', () => {
 
     expect(turn.appended.map((message) => message.role)).toEqual(['user', 'assistant']);
     expect(turn.reply).toBe('Queueで受け付けと処理を分ける話が中心よ。');
+    // 保存の無いターンにボタンは付かない（ADR 0015）。
+    expect(turn.saved).toEqual([]);
     // 記事の再取得もGitHubへの読み書きも起きない。
     expect(recorded.savedPath).toBe('');
     // 過去のツール結果は本文ごとモデルへ渡る。

@@ -1,5 +1,6 @@
 import { type ButtonAction, type MessageBlockAction, SlackApp } from 'slack-edge';
 import { DISMISS_ACTION_ID, dismissDigestClip, runWeeklyDigest } from './digest';
+import { dismissThreadClip, THREAD_DISMISS_ACTION_ID } from './dismiss';
 import { handleQueueMessage } from './processor';
 import type { ChatJob, Env } from './types';
 
@@ -75,6 +76,22 @@ function slackApp(env: Env): SlackApp<Env> {
           path,
           channel: payload.channel.id,
           messageTs: payload.message.ts,
+          blocks: payload.message.blocks ?? [],
+        });
+      },
+    )
+    // クリップ直後の返信に付くボタン。ダイジェストとは差し替え方が違うので処理を分ける（ADR 0015）。
+    .action<'button', MessageBlockAction<ButtonAction>>(
+      { type: 'button', action_id: THREAD_DISMISS_ACTION_ID },
+      async () => {},
+      async ({ payload }) => {
+        const path = payload.actions[0]?.value;
+        if (!path) return;
+        await dismissThreadClip(env, {
+          path,
+          channel: payload.channel.id,
+          messageTs: payload.message.ts,
+          text: payload.message.text ?? '',
           blocks: payload.message.blocks ?? [],
         });
       },

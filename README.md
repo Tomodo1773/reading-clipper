@@ -8,7 +8,7 @@ SlackへURLを送るだけで、記事の保存・要約・再発見までをま
 
 Reading Clipperは、アプリやブラウザの共有メニューからSlackへ送ったURLを読み取り、Markdownとしてprivate GitHubリポジトリへ保存するサービスです。保存直後にAIが内容を短く要約し、同じSlackスレッドで記事について質問できます。
 
-まだ片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れます。専用のWeb画面はなく、クリップ、会話、整理の操作がSlackだけで完結します。
+読まないと決めた記事は、保存直後の返信に付くボタンでその場で片付けられます。片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れます。専用のWeb画面はなく、クリップ、会話、整理の操作がSlackだけで完結します。
 
 ## 開発の背景
 
@@ -28,8 +28,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   保存時に1〜2文で要約し、続けて質問すると取得済みの本文を踏まえて回答します。同じスレッドでは記事を取り直しません。
 - **MarkdownをGitHubへ保存**
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存します。
-- **週次ダイジェストと片付け**
-  毎週日曜9時（JST）に、まだ片付けていないクリップを最大7件Slackへ投稿します。各記事はボタンまたはスレッド内の自然文で片付けられます。
+- **その場で、または週次ダイジェストで片付け**
+  保存した直後の返信にボタンが付き、読まないと決めた記事をその場で片付けられます。まだ片付けていないクリップは毎週日曜9時（JST）に最大7件Slackへ再掲され、こちらもボタンまたはスレッド内の自然文で片付けられます。
 
 ## 主な特徴・設計上のポイント
 
@@ -120,7 +120,7 @@ AI Gatewayの作成・更新には、`AI Gateway Read`と`AI Gateway Write`権�
 pnpm setup:aigw
 ```
 
-Slack AppはDMの`message.im`をEvents APIで受信し、Interactivityでダイジェストのボタンを処理します。Request URLはそれぞれ`/slack/events`と`/slack/interactivity`です。GitHub Appには保存先リポジトリだけを対象とした`Contents: Read and write`権限を与えます。
+Slack AppはDMの`message.im`をEvents APIで受信し、Interactivityで片付けのボタンを処理します。Request URLは両方とも`/slack/events`です（[ADR 0014](docs/adr/0014-slack-edge-for-the-boundary.md)）。GitHub Appには保存先リポジトリだけを対象とした`Contents: Read and write`権限を与えます。
 
 ### 検証
 
@@ -145,3 +145,4 @@ pnpm wrangler deploy --dry-run
 - [スレッドの会話履歴をDurable Objectsに保存する](docs/adr/0007-thread-history-in-durable-object.md)
 - [週次ダイジェストと片付け状態をD1で管理する](docs/adr/0010-weekly-digest-and-dismiss-bit.md)
 - [本文を読んでからAIが保存対象を決める](docs/adr/0012-load-content-then-save-loaded.md)
+- [クリップ直後の返信にDismissボタンを出す](docs/adr/0015-dismiss-button-on-the-clip-reply.md)

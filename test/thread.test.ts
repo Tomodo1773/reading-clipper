@@ -14,7 +14,7 @@ const answer = JSON.stringify({ role: 'assistant', content: 'こんばんは。�
 describe('ThreadAgent', () => {
   it('carries a saved turn into the next load', async () => {
     const stub = thread('D123:turn-carry');
-    expect(await stub.load('Ev1')).toEqual({ history: [] });
+    expect(await stub.load('Ev1')).toEqual({ history: [], saved: [] });
 
     await stub.save('Ev1', [greeting, answer], 'こんばんは。今日は何を読むの？');
 
@@ -34,6 +34,21 @@ describe('ThreadAgent', () => {
   it('keeps threads separate', async () => {
     await thread('D123:a').save('Ev1', [greeting], 'はじめまして。');
 
-    expect(await thread('D123:b').load('Ev1')).toEqual({ history: [] });
+    expect(await thread('D123:b').load('Ev1')).toEqual({ history: [], saved: [] });
+  });
+
+  /**
+   * 再送では返信を投げ直すだけでモデルを動かさないので、ボタンの材料もここに無いと落ちる
+   * （ADR 0015）。
+   */
+  it('returns the clips saved in the turn it already handled', async () => {
+    const stub = thread('D123:saved-clips');
+    const clip = { path: 'clips/Worker設計.md', title: 'Worker設計' };
+
+    await stub.save('EvSaved', [greeting, answer], '保存しておいたわ。', [clip]);
+
+    expect((await stub.load('EvSaved')).saved).toEqual([clip]);
+    // 保存が起きたのはそのターンだけ。別のイベントには付いてこない。
+    expect((await stub.load('EvOther')).saved).toEqual([]);
   });
 });

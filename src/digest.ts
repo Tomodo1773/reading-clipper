@@ -7,6 +7,7 @@ import {
   selectUndismissed,
   setClipDismissed,
 } from './clips';
+import { DISMISS_LABEL } from './dismiss';
 import type { Env } from './types';
 import { fetchWithTimeout } from './utils';
 
@@ -15,9 +16,6 @@ import { fetchWithTimeout } from './utils';
  * `action_id`と`value`で意図が確定して届くものを、自然文へ落として再解釈させない。
  */
 export const DISMISS_ACTION_ID = 'dismiss_clip';
-
-/** 読んだかどうかを主張しない語にする（ADR 0010）。「既読」とは呼ばない。 */
-const DISMISS_LABEL = '片付ける';
 
 /** Slackの`image_url`の上限。Qiitaの自動生成OGPは2600文字を超える実例がある。 */
 const MAX_IMAGE_URL_CHARS = 3000;

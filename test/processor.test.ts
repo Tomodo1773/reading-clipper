@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleQueueMessage } from '../src/processor';
 import type { ThreadAgent } from '../src/thread';
-import type { ChatJob } from '../src/types';
+import type { ChatJob, SavedClip } from '../src/types';
 import { jsonResponse, makeEnv, modelResponse, readSlackCall } from './helpers';
 
 const job: ChatJob = {
@@ -15,14 +15,44 @@ const job: ChatJob = {
 
 afterEach(() => vi.restoreAllMocks());
 
+const CLIP: SavedClip = { path: 'clips/Worker設計.md', title: 'Worker設計' };
+
+interface Post {
+  text: string;
+  blocks: unknown[] | undefined;
+}
+
+/**
+ * `chat.postMessage`だけを受ける。`routes`がundefinedを返した要求は想定外として投げる。
+ */
+function mockSlackPosts(routes: (input: RequestInfo | URL) => Response | undefined = () => undefined): Post[] {
+  const posts: Post[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const call = await readSlackCall(input);
+    if (call?.method === 'chat.postMessage') {
+      posts.push({
+        text: String(call.params.text),
+        blocks: call.params.blocks as unknown[] | undefined,
+      });
+      return jsonResponse({ ok: true, ts: '1700000000.000200' });
+    }
+    const routed = routes(input);
+    if (routed) return routed;
+    throw new Error(`unexpected request: ${String(input)}`);
+  });
+  return posts;
+}
+
 interface Stub {
   namespace: DurableObjectNamespace<ThreadAgent>;
   names: string[];
-  saved: { appended: string[]; reply: string }[];
+  saved: { appended: string[]; reply: string; clips: SavedClip[] }[];
 }
 
 /** 会話の置き場だけを差し替える。モデルの呼び出しはprocessor側で走る。 */
-function threadStub(stored: { history?: string[]; reply?: string } = {}): Stub {
+function threadStub(
+  stored: { history?: string[]; reply?: string; saved?: SavedClip[] } = {},
+): Stub {
   const stub: Stub = {
     names: [],
     saved: [],
@@ -34,9 +64,13 @@ function threadStub(stored: { history?: string[]; reply?: string } = {}): Stub {
       return 'thread-id';
     },
     get: () => ({
-      load: async () => ({ history: stored.history ?? [], reply: stored.reply }),
-      save: async (_eventId: string, appended: string[], reply: string) => {
-        stub.saved.push({ appended, reply });
+      load: async () => ({
+        history: stored.history ?? [],
+        reply: stored.reply,
+        saved: stored.saved ?? [],
+      }),
+      save: async (_eventId: string, appended: string[], reply: string, clips: SavedClip[]) => {
+        stub.saved.push({ appended, reply, clips });
       },
     }),
   } as unknown as DurableObjectNamespace<ThreadAgent>;
@@ -73,43 +107,58 @@ describe('queue handler', () => {
   });
 
   it('runs the turn against the thread keyed by channel and thread_ts', async () => {
-    const slackTexts: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const call = await readSlackCall(input);
-      if (call?.method === 'chat.postMessage') {
-        slackTexts.push(String(call.params.text));
-        return jsonResponse({ ok: true, ts: '1700000000.000200' });
-      }
-      if (String(input).includes(':generateContent')) {
-        return modelResponse([{ text: 'こんばんは。今日は何を読むの？' }]);
-      }
-      throw new Error(`unexpected request: ${String(input)}`);
-    });
+    const posts = mockSlackPosts((input) =>
+      String(input).includes(':generateContent')
+        ? modelResponse([{ text: 'こんばんは。今日は何を読むの？' }])
+        : undefined,
+    );
     const thread = threadStub();
     const { ack, message } = queueMessage();
 
     await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
 
     expect(thread.names).toEqual(['D123:1700000000.000100']);
-    expect(slackTexts).toEqual(['こんばんは。今日は何を読むの？']);
+    expect(posts.map((post) => post.text)).toEqual(['こんばんは。今日は何を読むの？']);
+    // 保存の無いターンなので、ボタンもblocksも付かない（ADR 0015）。
+    expect(posts[0]?.blocks).toBeUndefined();
     // user と assistant の2件が、JSONのまま会話へ積まれる。
     expect(thread.saved).toHaveLength(1);
     expect(
       (thread.saved[0]?.appended ?? []).map((message) => JSON.parse(message).role),
     ).toEqual(['user', 'assistant']);
+    expect(thread.saved[0]?.clips).toEqual([]);
     expect(ack).toHaveBeenCalledOnce();
   });
 
+  it('posts a dismiss button on the reply that saved a clip', async () => {
+    const posts = mockSlackPosts();
+    // 保存が起きたターンかどうかは、返信の文面ではなくツールの実行結果で決まる（ADR 0015）。
+    const thread = threadStub({ reply: '保存しておいたわ。', saved: [CLIP] });
+    const { message } = queueMessage();
+
+    await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
+
+    // 通知に出る文は今までどおり返信そのもの。本文はsectionが持つ。
+    expect(posts[0]?.text).toBe('保存しておいたわ。');
+    expect(posts[0]?.blocks).toEqual([
+      { type: 'section', text: { type: 'mrkdwn', text: '保存しておいたわ。' } },
+      {
+        type: 'actions',
+        block_id: 'dismiss-0',
+        elements: [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: '片付ける' },
+            action_id: 'dismiss_thread_clip',
+            value: CLIP.path,
+          },
+        ],
+      },
+    ]);
+  });
+
   it('reposts the stored reply for a redelivered event without calling the model', async () => {
-    const slackTexts: string[] = [];
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const call = await readSlackCall(input);
-      if (call?.method !== 'chat.postMessage') {
-        throw new Error(`unexpected request: ${String(input)}`);
-      }
-      slackTexts.push(String(call.params.text));
-      return jsonResponse({ ok: true, ts: '1700000000.000200' });
-    });
+    const posts = mockSlackPosts();
     const thread = threadStub({ reply: '一度だけ答えるわ。' });
     const { ack, message } = queueMessage();
 
@@ -118,7 +167,7 @@ describe('queue handler', () => {
     // Queuesはat-least-onceで、ackの前に落ちれば同じジョブがもう一度届く。
     // 守るのはモデルを二度呼ばないことと、返信の中身が変わらないことまで。
     // 投稿そのものの重複排除はしない（ADR 0014）。
-    expect(slackTexts).toEqual(['一度だけ答えるわ。']);
+    expect(posts.map((post) => post.text)).toEqual(['一度だけ答えるわ。']);
     expect(thread.saved).toEqual([]);
     expect(ack).toHaveBeenCalledOnce();
   });
