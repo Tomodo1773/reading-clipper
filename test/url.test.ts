@@ -67,6 +67,12 @@ describe('URL handling', () => {
     expect(buildClipPath('CONTENT')).toBe('clips/CONTENT.md');
   });
 
+  it('reserves README.md for the generated clip index', () => {
+    expect(buildClipPath('README')).toBe('clips/README-clip.md');
+    expect(buildClipPath('readme')).toBe('clips/readme-clip.md');
+    expect(buildClipPath('README.md')).toBe('clips/README.md.md');
+  });
+
   it('keeps each path segment within 255 bytes without splitting characters', () => {
     const fileName = buildClipPath('あ'.repeat(200)).split('/').at(-1)!;
     const bytes = new TextEncoder().encode(fileName).length;

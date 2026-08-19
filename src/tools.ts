@@ -1,6 +1,7 @@
 import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { refreshClipIndex } from './clip-index';
 import {
   clipTitle,
   deleteClip,
@@ -42,6 +43,15 @@ function toolFailure(
   return clipError.stage;
 }
 
+/** 派生ビューの失敗を、先に成立した記事本体の保存・削除へ波及させない。 */
+async function refreshClipIndexBestEffort(env: Env, path: string): Promise<void> {
+  try {
+    await refreshClipIndex(env);
+  } catch (error) {
+    toolFailure(error, 'github', 'refresh_clip_index', { path });
+  }
+}
+
 /**
  * ロード済みの本文を、ロードしたときのままGitHubとD1へ書く。
  *
@@ -53,7 +63,9 @@ async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string)
   const path = buildClipPath(content.title);
   // 既存ファイルの更新にはshaが要る。同じタイトルの記事は上書きする。
   const existing = await getGitHubFile(env, path);
-  const saved = await putGitHubFile(env, path, renderClipMarkdown(content, receivedAt), existing?.sha);
+  const saved = await putGitHubFile(env, path, renderClipMarkdown(content, receivedAt), {
+    sha: existing?.sha,
+  });
   // D1は台帳ではなく注釈レイヤーなので、書けなくても保存は成立させる（ADR 0010）。
   // ただしこの行が入らないと、そのクリップはダイジェストに永久に出てこない。
   try {
@@ -65,6 +77,7 @@ async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string)
       imageUrl: content.imageUrl,
       clippedAt: receivedAt,
     });
+    await refreshClipIndexBestEffort(env, path);
   } catch (error) {
     toolFailure(error, 'clips', 'save_loaded', { path });
   }
@@ -286,6 +299,7 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
         // 残った行はダイジェストに1度出て、「片付ける」を1回押せば終わる。
         try {
           await deleteClip(env, clip.path);
+          await refreshClipIndexBestEffort(env, clip.path);
         } catch (error) {
           toolFailure(error, 'clips', 'delete_clip', { path: clip.path });
         }

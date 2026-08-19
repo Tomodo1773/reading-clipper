@@ -6,6 +6,9 @@ const DIGEST_SIZE = 7;
 /** 1回の検索で返す件数の上限。結果はモデルの文脈に入るので、全件は返さない（ADR 0016）。 */
 const SEARCH_SIZE = 8;
 
+/** GitHubのclips/直下で見せる新着件数。保存総数には連動させない（ADR 0017）。 */
+const RECENT_CLIP_SIZE = 20;
+
 /** 台帳の1行のうち、読み出す用途によらず要る部分。 */
 export interface ClipRow {
   path: string;
@@ -92,6 +95,19 @@ export async function selectDigestClips(env: Env): Promise<DigestClip[]> {
   )
     .bind(DIGEST_SIZE)
     .all<DigestClip>();
+  return results;
+}
+
+/** 保存構造とは別の新着ビューを組み立てるため、片付け済みも含めて新しい順に読む。 */
+export async function selectRecentClips(env: Env): Promise<ClipRow[]> {
+  const { results } = await env.CLIPS.prepare(
+    `SELECT path, url, title, clipped_at AS clippedAt
+       FROM clips
+      ORDER BY clipped_at DESC, path ASC
+      LIMIT ?`,
+  )
+    .bind(RECENT_CLIP_SIZE)
+    .all<ClipRow>();
   return results;
 }
 

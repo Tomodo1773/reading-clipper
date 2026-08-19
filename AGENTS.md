@@ -25,6 +25,7 @@
 | `src/url.ts` | canonical化、種別判定、保存先パスの決定 |
 | `src/github.ts` | GitHub App認証とContents API |
 | `src/markdown.ts` | 保存するMarkdownの組み立て |
+| `src/clip-index.ts` / `src/clip-index-format.ts` | 新着一覧のGitHub同期と、importなしのMarkdown生成・生成物識別 |
 | `src/clips.ts` | D1へのアクセス。読書状態の注釈レイヤーです |
 | `src/digest.ts` | 週次ダイジェストの組み立て |
 | `src/dismiss.ts` | 片付けのボタンと押下処理。ダイジェストの行と、クリップ直後の返信で共通です |
