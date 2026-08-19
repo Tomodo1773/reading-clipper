@@ -32,6 +32,8 @@ interface Recorded {
   modelBodies: Record<string, unknown>[];
   savedPath: string;
   savedMarkdown: string;
+  /** PUTに載ったsha。新規作成なら空のまま。 */
+  savedSha: string;
   /** 本文の取得が何回走ったか。ロードと保存で二重に取っていないことを見る。 */
   articleFetches: number;
   /** GitHubへDELETEが飛んだパス。飛んでいなければ空のまま（ADR 0016）。 */
@@ -55,6 +57,7 @@ function mockWorld(
     modelBodies: [],
     savedPath: '',
     savedMarkdown: '',
+    savedSha: '',
     articleFetches: 0,
     deletedPath: '',
     deletedSha: '',
@@ -85,8 +88,10 @@ function mockWorld(
       return jsonResponse({ message: 'Not Found' }, 404);
     }
     if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
+      const body = JSON.parse(String(init?.body));
       recorded.savedPath = decodeURIComponent(url.split('/contents/')[1] ?? '');
-      recorded.savedMarkdown = base64ToUtf8(JSON.parse(String(init?.body)).content);
+      recorded.savedMarkdown = base64ToUtf8(body.content);
+      recorded.savedSha = body.sha ?? '';
       return jsonResponse(
         { content: { sha: 'new-sha', html_url: 'https://github.com/example/clips/blob/main/clip.md' } },
         201,
@@ -253,6 +258,40 @@ describe('chat turn', () => {
     expect(recorded.articleFetches).toBe(0);
     expect(recorded.savedPath).toBe('');
     expect(await testEnv.CLIPS.prepare('SELECT COUNT(*) AS n FROM clips').first()).toEqual({ n: 0 });
+  });
+
+  it('overwrites the file that is already there instead of failing', async () => {
+    // 同じタイトルの記事は上書きする（ADR 0005 / 0013）。更新にはshaが要り、
+    // これを載せ損ねるとGitHubが422で拒否する。
+    const recorded = mockWorld(
+      [
+        loadCallReply('https://qiita.com/alice/items/abc'),
+        saveCallReply('https://qiita.com/alice/items/abc'),
+        modelResponse([{ text: '同じ場所へ置き直しておいたわ。' }]),
+      ],
+      (url, method) =>
+        url.includes('/repos/example/clips/contents/') && method === 'GET'
+          ? jsonResponse({
+              sha: 'old-sha',
+              html_url: 'https://github.com/example/clips/blob/main/clip.md',
+            })
+          : undefined,
+    );
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: 'https://qiita.com/alice/items/abc',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(recorded.savedSha).toBe('old-sha');
+    expect(recorded.savedPath).toBe('clips/Worker設計.md');
+    expect(toolOutput(turn.appended, 'save_loaded')).toMatchObject({ saved: true });
+    // 台帳も1行のまま。保存し直しは新しいクリップではない。
+    expect(
+      await testEnv.CLIPS.prepare('SELECT COUNT(*) AS n FROM clips').first<{ n: number }>(),
+    ).toEqual({ n: 1 });
   });
 
   /**

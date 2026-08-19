@@ -1,6 +1,7 @@
 import { env as testEnv } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  clipTitle,
   deleteClip,
   findClips,
   markDigestShown,
@@ -270,6 +271,22 @@ describe('findClips', () => {
     );
 
     expect(await findClips(env, 'Worker')).toHaveLength(8);
+  });
+});
+
+describe('clipTitle', () => {
+  // ダイジェストの行と検索の結果が、同じ題名でクリップを呼ぶための1本。
+  it('reads a title out of the path when the row has none', () => {
+    // バックフィル由来の行は`title`を持たない（ADR 0010）。
+    expect(
+      clipTitle({ path: 'clips/題名の無い記事.md', title: null, url: null, clippedAt: '' }),
+    ).toBe('題名の無い記事');
+  });
+
+  it('prefers the stored title, which keeps what the file name had to drop', () => {
+    expect(
+      clipTitle({ path: 'clips/Worker-設計.md', title: 'Worker/設計', url: null, clippedAt: '' }),
+    ).toBe('Worker/設計');
   });
 });
 

@@ -6,24 +6,36 @@ const DIGEST_SIZE = 7;
 /** 1回の検索で返す件数の上限。結果はモデルの文脈に入るので、全件は返さない（ADR 0016）。 */
 const SEARCH_SIZE = 8;
 
-export interface DigestClip {
+/** 台帳の1行のうち、読み出す用途によらず要る部分。 */
+export interface ClipRow {
   path: string;
   /** 記事のcanonical URL。NULLの行はGitHubのファイルへリンクする。 */
   url: string | null;
   /** 記事タイトル。NULLならパス末尾から導出する（ADR 0011）。 */
   title: string | null;
-  excerpt: string | null;
-  imageUrl: string | null;
   clippedAt: string;
 }
 
+/** 週次ダイジェストに出す1件。表示に使う列を余分に読む（ADR 0011）。 */
+export interface DigestClip extends ClipRow {
+  excerpt: string | null;
+  imageUrl: string | null;
+}
+
 /** 検索で見つけたクリップ。片付いているかどうかも返す（ADR 0016）。 */
-export interface FoundClip {
-  path: string;
-  title: string | null;
-  url: string | null;
-  clippedAt: string;
+export interface FoundClip extends ClipRow {
   dismissedAt: string | null;
+}
+
+/**
+ * その行をどの題名で呼ぶか。
+ *
+ * ADR 0005でファイル名を記事タイトルそのものにしたので、`title`が無い行（バックフィル由来）
+ * でもパスから読める題名が取れる。ただし長い題名はファイル名にした時点で削られている。
+ */
+export function clipTitle(clip: ClipRow): string {
+  if (clip.title) return clip.title;
+  return (clip.path.split('/').pop() ?? clip.path).replace(/\.md$/, '');
 }
 
 /** 保存時に台帳へ書く値。表示に使うものはここで複製する（ADR 0011）。 */

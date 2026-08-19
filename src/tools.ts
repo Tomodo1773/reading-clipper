@@ -1,14 +1,46 @@
 import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { deleteClip, type FoundClip, findClips, recordClip, setClipDismissed } from './clips';
-import { asClipError } from './errors';
+import {
+  clipTitle,
+  deleteClip,
+  type FoundClip,
+  findClips,
+  recordClip,
+  setClipDismissed,
+} from './clips';
+import { asClipError, type ProcessingStage } from './errors';
 import { clipExcerpt } from './excerpt';
 import { loadContent } from './fetchers';
 import { deleteGitHubFile, getGitHubFile, putGitHubFile } from './github';
 import { renderClipMarkdown } from './markdown';
 import type { Env, FetchedContent } from './types';
 import { buildClipPath, canonicalizeUrl } from './url';
+
+/**
+ * ツールの失敗を1行のログに落とし、モデルへ返す`failed_at`を作る。
+ *
+ * どこで落ちたかはstageで足りる。散文はモデルが書くので、原因ごとに返り値を分けない（ADR 0008）。
+ * ログだけが要る呼び出し（GitHubは成功してD1だけ落ちた場合）では、戻り値を捨ててよい。
+ */
+function toolFailure(
+  error: unknown,
+  stage: ProcessingStage,
+  tool: string,
+  extra: Record<string, unknown> = {},
+): ProcessingStage {
+  const clipError = asClipError(error, stage);
+  console.warn(
+    JSON.stringify({
+      stage: clipError.stage,
+      status: clipError.status,
+      message: clipError.message,
+      tool,
+      ...extra,
+    }),
+  );
+  return clipError.stage;
+}
 
 /**
  * ロード済みの本文を、ロードしたときのままGitHubとD1へ書く。
@@ -34,8 +66,7 @@ async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string)
       clippedAt: receivedAt,
     });
   } catch (error) {
-    const clipError = asClipError(error, 'clips');
-    console.warn(JSON.stringify({ stage: clipError.stage, message: clipError.message, path }));
+    toolFailure(error, 'clips', 'save_loaded', { path });
   }
   // 本文は返さない。会話にはロードしたときの1回だけ現れれば足りる（ADR 0012）。
   return { saved: true, path, github_url: saved.htmlUrl, title: content.title };
@@ -124,17 +155,7 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
             body: content.markdown,
           };
         } catch (error) {
-          const clipError = asClipError(error, 'fetch');
-          console.warn(
-            JSON.stringify({
-              stage: clipError.stage,
-              status: clipError.status,
-              message: clipError.message,
-              tool: 'load_content',
-            }),
-          );
-          // どこで落ちたかはstageで足りる。散文はモデルが書く。
-          return { loaded: false, failed_at: clipError.stage };
+          return { loaded: false, failed_at: toolFailure(error, 'fetch', 'load_content') };
         }
       },
     }),
@@ -157,16 +178,7 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
         try {
           return await saveLoaded(env, content, receivedAt);
         } catch (error) {
-          const clipError = asClipError(error, 'github');
-          console.warn(
-            JSON.stringify({
-              stage: clipError.stage,
-              status: clipError.status,
-              message: clipError.message,
-              tool: 'save_loaded',
-            }),
-          );
-          return { saved: false, failed_at: clipError.stage };
+          return { saved: false, failed_at: toolFailure(error, 'github', 'save_loaded') };
         }
       },
     }),
@@ -192,15 +204,7 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
           const found = await setClipDismissed(env, path, dismissed, receivedAt);
           return found ? { updated: true, path, dismissed } : { updated: false, unknown_path: path };
         } catch (error) {
-          const clipError = asClipError(error, 'clips');
-          console.warn(
-            JSON.stringify({
-              stage: clipError.stage,
-              message: clipError.message,
-              tool: 'set_clip_dismissed',
-            }),
-          );
-          return { updated: false, failed_at: clipError.stage };
+          return { updated: false, failed_at: toolFailure(error, 'clips', 'set_clip_dismissed') };
         }
       },
     }),
@@ -232,8 +236,7 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
               foundClips.set(ref, clip);
               return {
                 ref,
-                // 題名を持たない行（バックフィル由来）は、パスが唯一の手掛かりになる。
-                title: clip.title ?? clip.path,
+                title: clipTitle(clip),
                 url: clip.url ?? undefined,
                 // set_clip_dismissedはパスで引くので、同じ検索から片付けへも繋げられるようにする。
                 path: clip.path,
@@ -243,15 +246,7 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
             }),
           };
         } catch (error) {
-          const clipError = asClipError(error, 'clips');
-          console.warn(
-            JSON.stringify({
-              stage: clipError.stage,
-              message: clipError.message,
-              tool: 'find_clips',
-            }),
-          );
-          return { found: [], failed_at: clipError.stage };
+          return { found: [], failed_at: toolFailure(error, 'clips', 'find_clips') };
         }
       },
     }),
@@ -278,37 +273,23 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
         // 探していないものは消せないので、モデルが組み立てた題名からパスへは届かない。
         const clip = foundClips.get(ref);
         if (!clip) return { deleted: false, unknown_ref: ref };
-        let github: 'deleted' | 'missing';
+        let removed: boolean;
         try {
           // GitHubを先に消す。逆にするとD1だけ消えてゴミファイルが残り、
           // ダイジェストに二度と出てこない＝気づけないゴミになる（ADR 0016）。
-          const existing = await getGitHubFile(env, clip.path);
-          if (existing) await deleteGitHubFile(env, clip.path, existing.sha);
-          github = existing ? 'deleted' : 'missing';
+          removed = await deleteGitHubFile(env, clip.path);
         } catch (error) {
-          const clipError = asClipError(error, 'github');
-          console.warn(
-            JSON.stringify({
-              stage: clipError.stage,
-              status: clipError.status,
-              message: clipError.message,
-              tool: 'delete_clip',
-            }),
-          );
           // ファイルが残っている以上、台帳の行も残す。片方だけ消して黙るのが一番悪い。
-          return { deleted: false, failed_at: clipError.stage };
+          return { deleted: false, failed_at: toolFailure(error, 'github', 'delete_clip') };
         }
         // D1は台帳ではなく注釈レイヤーなので、消せなくてもファイルは既に消えている（ADR 0010）。
         // 残った行はダイジェストに1度出て、「片付ける」を1回押せば終わる。
         try {
           await deleteClip(env, clip.path);
         } catch (error) {
-          const clipError = asClipError(error, 'clips');
-          console.warn(
-            JSON.stringify({ stage: clipError.stage, message: clipError.message, path: clip.path }),
-          );
+          toolFailure(error, 'clips', 'delete_clip', { path: clip.path });
         }
-        return { deleted: true, title: clip.title ?? clip.path, github };
+        return { deleted: true, title: clipTitle(clip), github: removed ? 'deleted' : 'missing' };
       },
     }),
   };
