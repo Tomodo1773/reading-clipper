@@ -197,6 +197,40 @@ export async function putGitHubFile(
   return { path, sha: savedSha, htmlUrl };
 }
 
+/**
+ * クリップのファイルを消す（ADR 0016）。戻り値は実際に消したかどうかで、既に無ければfalse。
+ *
+ * 消えるのはHEADからだけで、本文はこのコミットの1つ前に残る。削除を取り返す唯一の導線が
+ * これなので、確認導線を設けない判断はここに依存している。
+ *
+ * shaの取得まで持つ。保存と違い削除の振る舞いは1通りしか無いので、
+ * 「引いてから消す」を呼び出し側へ出しても分岐が増えるだけになる。
+ */
+export async function deleteGitHubFile(env: Env, path: string): Promise<boolean> {
+  const existing = await getGitHubFile(env, path);
+  if (!existing) return false;
+  const token = await getInstallationToken(env);
+  const response = await fetchWithTimeout(
+    contentsUrl(env.GITHUB_REPO, path),
+    {
+      method: 'DELETE',
+      headers: { ...githubHeaders(token), 'content-type': 'application/json' },
+      body: JSON.stringify({ message: `Delete clip: ${path}`, sha: existing.sha }),
+    },
+    20_000,
+    'github',
+  );
+  if (!response.ok) {
+    throw new ClipError(
+      `GitHub delete returned ${response.status}`,
+      'github',
+      isRetryableStatus(response.status),
+      response.status,
+    );
+  }
+  return true;
+}
+
 /** Testsでmodule-scope token cacheを分離するためのhook。 */
 export function resetGitHubTokenCache(): void {
   cachedToken = undefined;

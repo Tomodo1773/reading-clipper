@@ -1,6 +1,9 @@
 import { env as testEnv } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  clipTitle,
+  deleteClip,
+  findClips,
   markDigestShown,
   recordClip,
   selectDigestClips,
@@ -186,5 +189,117 @@ describe('setClipDismissed', () => {
     expect(await setClipDismissed(env, 'clips/does-not-exist.md', true, '2026-08-03T00:00:00.000Z')).toBe(
       false,
     );
+  });
+});
+
+describe('findClips', () => {
+  async function seedTitled(
+    rows: Array<{ title: string; url: string; clippedAt: string }>,
+  ): Promise<void> {
+    for (const row of rows) {
+      await recordClip(env, {
+        path: `clips/${row.title}.md`,
+        url: row.url,
+        title: row.title,
+        excerpt: '抜粋',
+        clippedAt: row.clippedAt,
+      });
+    }
+  }
+
+  it('finds a clip by part of its title, newest first', async () => {
+    await seedTitled([
+      { title: 'Workerの設計', url: 'https://qiita.com/a/items/1', clippedAt: '2026-08-01T00:00:00.000Z' },
+      { title: 'Workerの運用', url: 'https://zenn.dev/a/articles/2', clippedAt: '2026-08-05T00:00:00.000Z' },
+      { title: 'Rustの話', url: 'https://qiita.com/a/items/3', clippedAt: '2026-08-09T00:00:00.000Z' },
+    ]);
+
+    expect((await findClips(env, 'Worker')).map((clip) => clip.title)).toEqual([
+      'Workerの運用',
+      'Workerの設計',
+    ]);
+  });
+
+  it('finds a clip by part of its URL', async () => {
+    await seedTitled([
+      { title: 'Workerの設計', url: 'https://qiita.com/a/items/1', clippedAt: '2026-08-01T00:00:00.000Z' },
+      { title: 'Rustの話', url: 'https://zenn.dev/a/articles/2', clippedAt: '2026-08-02T00:00:00.000Z' },
+    ]);
+
+    expect((await findClips(env, 'zenn.dev')).map((clip) => clip.title)).toEqual(['Rustの話']);
+  });
+
+  it('returns dismissed clips too, since garbage is often dismissed before it is deleted', async () => {
+    await seedTitled([
+      { title: 'Workerの設計', url: 'https://qiita.com/a/items/1', clippedAt: '2026-08-01T00:00:00.000Z' },
+    ]);
+    await setClipDismissed(env, 'clips/Workerの設計.md', true, '2026-08-02T00:00:00.000Z');
+
+    const [found] = await findClips(env, 'Worker');
+
+    expect(found?.dismissedAt).toBe('2026-08-02T00:00:00.000Z');
+  });
+
+  it('finds a clip with no title by its path', async () => {
+    // バックフィル由来の行は`title`を持たない（ADR 0010）。
+    await testEnv.CLIPS.prepare('INSERT INTO clips (path, clipped_at) VALUES (?, ?)')
+      .bind('clips/題名の無い記事.md', '2026-08-01T00:00:00.000Z')
+      .run();
+
+    expect((await findClips(env, '題名の無い')).map((clip) => clip.path)).toEqual([
+      'clips/題名の無い記事.md',
+    ]);
+  });
+
+  it('treats LIKE wildcards as literal text instead of matching everything', async () => {
+    await seedTitled([
+      { title: 'Workerの設計', url: 'https://qiita.com/a/items/1', clippedAt: '2026-08-01T00:00:00.000Z' },
+      { title: 'Rustの話', url: 'https://qiita.com/a/items/2', clippedAt: '2026-08-02T00:00:00.000Z' },
+    ]);
+
+    expect(await findClips(env, '%')).toEqual([]);
+    expect(await findClips(env, '_')).toEqual([]);
+  });
+
+  it('caps how many clips it puts into the model context', async () => {
+    await seedTitled(
+      Array.from({ length: 12 }, (_unused, index) => ({
+        title: `Workerの記事${index}`,
+        url: `https://qiita.com/a/items/${index}`,
+        clippedAt: `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+      })),
+    );
+
+    expect(await findClips(env, 'Worker')).toHaveLength(8);
+  });
+});
+
+describe('clipTitle', () => {
+  // ダイジェストの行と検索の結果が、同じ題名でクリップを呼ぶための1本。
+  it('reads a title out of the path when the row has none', () => {
+    // バックフィル由来の行は`title`を持たない（ADR 0010）。
+    expect(
+      clipTitle({ path: 'clips/題名の無い記事.md', title: null, url: null, clippedAt: '' }),
+    ).toBe('題名の無い記事');
+  });
+
+  it('prefers the stored title, which keeps what the file name had to drop', () => {
+    expect(
+      clipTitle({ path: 'clips/Worker-設計.md', title: 'Worker/設計', url: null, clippedAt: '' }),
+    ).toBe('Worker/設計');
+  });
+});
+
+describe('deleteClip', () => {
+  it('removes the row so the clip stops appearing in the digest', async () => {
+    await seed([{ path: 'clips/ゴミ.md', clippedAt: '2026-08-01T00:00:00.000Z' }]);
+
+    expect(await deleteClip(env, 'clips/ゴミ.md')).toBe(true);
+    expect(await readClip('clips/ゴミ.md')).toBeNull();
+    expect(await selectDigestClips(env)).toEqual([]);
+  });
+
+  it('reports a path that is not in the ledger instead of claiming success', async () => {
+    expect(await deleteClip(env, 'clips/does-not-exist.md')).toBe(false);
   });
 });

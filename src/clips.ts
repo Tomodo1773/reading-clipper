@@ -3,15 +3,39 @@ import type { Env } from './types';
 /** 1回のダイジェストで出す件数。保存量に連動させない（ADR 0010）。 */
 const DIGEST_SIZE = 7;
 
-export interface DigestClip {
+/** 1回の検索で返す件数の上限。結果はモデルの文脈に入るので、全件は返さない（ADR 0016）。 */
+const SEARCH_SIZE = 8;
+
+/** 台帳の1行のうち、読み出す用途によらず要る部分。 */
+export interface ClipRow {
   path: string;
   /** 記事のcanonical URL。NULLの行はGitHubのファイルへリンクする。 */
   url: string | null;
   /** 記事タイトル。NULLならパス末尾から導出する（ADR 0011）。 */
   title: string | null;
+  clippedAt: string;
+}
+
+/** 週次ダイジェストに出す1件。表示に使う列を余分に読む（ADR 0011）。 */
+export interface DigestClip extends ClipRow {
   excerpt: string | null;
   imageUrl: string | null;
-  clippedAt: string;
+}
+
+/** 検索で見つけたクリップ。片付いているかどうかも返す（ADR 0016）。 */
+export interface FoundClip extends ClipRow {
+  dismissedAt: string | null;
+}
+
+/**
+ * その行をどの題名で呼ぶか。
+ *
+ * ADR 0005でファイル名を記事タイトルそのものにしたので、`title`が無い行（バックフィル由来）
+ * でもパスから読める題名が取れる。ただし長い題名はファイル名にした時点で削られている。
+ */
+export function clipTitle(clip: ClipRow): string {
+  if (clip.title) return clip.title;
+  return (clip.path.split('/').pop() ?? clip.path).replace(/\.md$/, '');
 }
 
 /** 保存時に台帳へ書く値。表示に使うものはここで複製する（ADR 0011）。 */
@@ -112,5 +136,49 @@ export async function setClipDismissed(
   const { meta } = await env.CLIPS.prepare('UPDATE clips SET dismissed_at = ? WHERE path = ?')
     .bind(dismissed ? at : null, path)
     .run();
+  return meta.changes > 0;
+}
+
+/**
+ * LIKEのメタ文字を打ち消す。素通しにすると`%`1文字で全件一致になる。
+ * エスケープ文字自身も対象に含める。含めないと、語に混じった`\`が後続の1文字を無効にする。
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+/**
+ * 題名・URL・パスの部分一致でクリップを探す（ADR 0016）。
+ *
+ * 片付け済みも返す。ダイジェストの母集団と違い、片付けたつもりのゴミを
+ * 後から消したくなる場面があるため、`dismissed_at`では絞らない。
+ *
+ * `title`がNULLの行（バックフィル由来）があるので、パスも一致の対象にする。
+ * 全文検索の索引は持たない。個人利用の規模では部分一致1本で足りる。
+ */
+export async function findClips(env: Env, query: string): Promise<FoundClip[]> {
+  const pattern = `%${escapeLike(query)}%`;
+  const { results } = await env.CLIPS.prepare(
+    `SELECT path, title, url, clipped_at AS clippedAt, dismissed_at AS dismissedAt
+       FROM clips
+      WHERE title LIKE ? ESCAPE '\\'
+         OR url LIKE ? ESCAPE '\\'
+         OR path LIKE ? ESCAPE '\\'
+      ORDER BY clipped_at DESC
+      LIMIT ?`,
+  )
+    .bind(pattern, pattern, pattern, SEARCH_SIZE)
+    .all<FoundClip>();
+  return results;
+}
+
+/**
+ * 台帳から行ごと消す（ADR 0016）。
+ *
+ * 片付けの印とは別で、保存そのものを無かったことにする操作の片割れである。
+ * もう片方のGitHubのファイルを先に消してから呼ぶ。戻り値はそのパスが台帳にあったかどうか。
+ */
+export async function deleteClip(env: Env, path: string): Promise<boolean> {
+  const { meta } = await env.CLIPS.prepare('DELETE FROM clips WHERE path = ?').bind(path).run();
   return meta.changes > 0;
 }

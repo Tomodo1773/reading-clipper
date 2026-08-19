@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai';
 import { type AnyMessageBlock, type SectionBlock, SlackAPIClient } from 'slack-edge';
-import { type DigestClip, markDigestShown, selectDigestClips } from './clips';
+import { clipTitle, type DigestClip, markDigestShown, selectDigestClips } from './clips';
 import { clipBlockId, dismissActionBlock } from './dismiss';
 import type { Env } from './types';
 import { fetchWithTimeout } from './utils';
@@ -10,12 +10,6 @@ const MAX_IMAGE_URL_CHARS = 3000;
 
 /** Slackが受け付ける画像形式。これ以外を渡すと投稿ごと拒否される。 */
 const IMAGE_CONTENT_TYPE = /^image\/(?:png|jpeg|jpg|gif)\b/i;
-
-/** ADR 0005でファイル名を記事タイトルそのものにしたが、長い題名はそこで削られる。 */
-function clipTitle(clip: DigestClip): string {
-  if (clip.title) return clip.title;
-  return (clip.path.split('/').pop() ?? clip.path).replace(/\.md$/, '');
-}
 
 /** 保存先はフラットな`clips/{title}.md`なので、ホストは列に持たず`url`から出す。 */
 function clipHost(url: string | null): string {
