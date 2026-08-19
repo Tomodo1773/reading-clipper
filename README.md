@@ -6,42 +6,42 @@ SlackへURLを送るだけで、記事の保存・要約・再発見までをま
 
 ## 概要
 
-Reading Clipperは、アプリやブラウザの共有メニューからSlackへ送ったURLを読み取り、Markdownとしてprivate GitHubリポジトリへ保存するサービスです。保存直後にAIが内容を短く要約し、同じSlackスレッドで記事について質問できます。
+Reading Clipperは、アプリやブラウザの共有メニューからSlackへ送ったURLを読み取り、Markdownとしてprivate GitHubリポジトリへ保存するサービス。保存直後にAIが内容を短く要約し、同じSlackスレッドで記事について質問できる。
 
-読まないと決めた記事は、保存直後の返信に付くボタンでその場で片付けられます。片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れます。専用のWeb画面はなく、クリップ、会話、整理の操作がSlackだけで完結します。
+読まないと決めた記事は、保存直後の返信に付くボタンでその場で片付けられる。片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れる。専用のWeb画面はなく、クリップ、会話、整理の操作がSlackだけで完結する。
 
 ## 開発の背景
 
-読みたい技術記事はZenn、X、Qiitaなど複数のプラットフォームに散らばり、それぞれのブックマークへ保存すると一覧性がなくなります。さらに、保存した記事が再び目に入る機会がなく、積読になりがちでした。
+読みたい技術記事はZenn、X、Qiitaなど複数のプラットフォームに散らばり、それぞれのブックマークへ保存すると一覧性がなくなる。さらに、保存した記事が再び目に入る機会がなく、積読になりがち。
 
-そこで、入口を普段使っているSlackへ一本化し、本文はGitHubへ蓄積、AIによる要約と週次ダイジェストで読むきっかけを作るサービスとして開発しました。通常のWeb取得では扱いづらいXの公開PostをAPI経由で読めることも、個人用ツールとして重視しています。
+そこで、入口を普段使っているSlackへ一本化し、本文はGitHubへ蓄積、AIによる要約と週次ダイジェストで読むきっかけを作るサービスとして開発。通常のWeb取得では扱いづらいXの公開PostをAPI経由で読めることも、個人用ツールとして重視している。
 
 ## 主な機能
 
 - **Slackからすぐにクリップ**
-  スマートフォンのアプリやブラウザの共有メニューから、URLをSlack AppのDMへ送るだけで受け付けます。
+  スマートフォンのアプリやブラウザの共有メニューから、URLをSlack AppのDMへ送るだけで受け付ける。
 - **URLに応じた本文取得**
-  Qiita、Zenn、Xの公開Post、一般のWebページをそれぞれに適した方法で取得します。リダイレクトURLにも対応します。
+  Qiita、Zenn、Xの公開Post、一般のWebページをそれぞれに適した方法で取得。リダイレクトURLにも対応。
 - **紹介投稿から本命の記事を保存**
-  Xの短い投稿がブログ記事を紹介している場合、AIが投稿本文を読んだうえでリンク先も取得し、紹介投稿ではなく記事本体をクリップします。
+  Xの短い投稿がブログ記事を紹介している場合、AIが投稿本文を読んだうえでリンク先も取得し、紹介投稿ではなく記事本体をクリップする。
 - **要約とスレッド内の質問応答**
-  保存時に1〜2文で要約し、続けて質問すると取得済みの本文を踏まえて回答します。同じスレッドでは記事を取り直しません。
+  保存時に1〜2文で要約し、続けて質問すると取得済みの本文を踏まえて回答。同じスレッドでは記事を取り直さない。
 - **MarkdownをGitHubへ保存**
-  記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存します。
+  記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存。
 - **その場で、または週次ダイジェストで片付け**
-  保存した直後の返信にボタンが付き、読まないと決めた記事をその場で片付けられます。まだ片付けていないクリップは毎週日曜9時（JST）に最大7件Slackへ再掲され、こちらもボタンまたはスレッド内の自然文で片付けられます。
+  保存した直後の返信にボタンが付き、読まないと決めた記事をその場で片付けられる。まだ片付けていないクリップは毎週日曜9時（JST）に最大7件Slackへ再掲され、こちらもボタンまたはスレッド内の自然文で片付けられる。
 
 ## 主な特徴・設計上のポイント
 
 ### Slackだけで完結
 
-専用のWeb UIを持たず、保存、要約、記事についての会話、週次通知、片付けまでをSlackへ集約しています。新しい操作画面を覚えたり、一覧を見に行ったりする必要がありません。
+専用のWeb UIを持たず、保存、要約、記事についての会話、週次通知、片付けまでをSlackへ集約。新しい操作画面を覚えたり、一覧を見に行ったりする必要がない。
 
 ### Cloudflare Workersによる軽快な応答
 
-常駐サーバーを持たず、Cloudflare Workers、Queues、Durable Objects、D1を組み合わせています。Workersの短いコールドスタートを活かし、個人利用では無料枠を中心にしながら体感速度を損なわない構成を狙っています。
+常駐サーバーを持たず、Cloudflare Workers、Queues、Durable Objects、D1を組み合わせている。Workersの短いコールドスタートを活かし、個人利用では無料枠を中心にしながら体感速度を損なわない構成を狙っている。
 
-Slack Events APIへの応答は受付処理だけに限定し、本文取得、AI処理、GitHub保存はQueueへ渡します。時間のかかる処理からSlackの3秒制限を切り離しています。
+Slack Events APIへの応答は受付処理だけに限定し、本文取得、AI処理、GitHub保存はQueueへ渡す。時間のかかる処理からSlackの3秒制限を切り離している。
 
 ### 用途ごとに状態の置き場所を分離
 
@@ -49,15 +49,15 @@ Slack Events APIへの応答は受付処理だけに限定し、本文取得、A
 - Slackスレッドごとの会話履歴はDurable Objectsに置く
 - 週次ダイジェストの「片付けたか」と表示履歴はD1に置く
 
-D1は厳密な既読・未読管理ではなく、GitHub上のクリップへ付ける軽量な注釈レイヤーです。失われてもGitHubのMarkdownから再構成できます。
+D1は厳密な既読・未読管理ではなく、GitHub上のクリップへ付ける軽量な注釈レイヤー。失われてもGitHubのMarkdownから再構成できる。
 
 ## システム構成
 
-構成図は静的な依存関係を示しています。矢印は主要な連携を表し、完全なリクエスト・レスポンスの時系列ではありません。
+構成図は静的な依存関係を示す。矢印は主要な連携を表し、完全なリクエスト・レスポンスの時系列ではない。
 
-受付、Queue処理、週次cronは1つのCloudflare Workerへ同居させています。AI Gateway経由でGeminiを呼び、記事本文はGitHub、会話履歴はDurable Objects、ダイジェスト用の状態はD1へ保存します。
+受付、Queue処理、週次cronは1つのCloudflare Workerへ同居させている。AI Gateway経由でGeminiを呼び、記事本文はGitHub、会話履歴はDurable Objects、ダイジェスト用の状態はD1へ保存する。
 
-構成図の編集元とアイコンの出典は[`docs/architecture/`](docs/architecture/)にあります。
+構成図の編集元とアイコンの出典は[`docs/architecture/`](docs/architecture/)にある。
 
 ## 技術スタック
 
@@ -91,7 +91,7 @@ pnpm wrangler d1 execute reading-clipper-clips-db --local --file=./schema.sql
 pnpm dev
 ```
 
-Slack連携を含めて動かすには、`wrangler.jsonc`に定義されたQueue、Durable Objects、D1、Cron Triggers、AI Gatewayと、次のWorker Secretsが必要です。最新の一覧と用途は[`src/types.ts`](src/types.ts)の`Env`を参照してください。
+Slack連携を含めて動かすには、`wrangler.jsonc`に定義されたQueue、Durable Objects、D1、Cron Triggers、AI Gatewayと、次のWorker Secretsが必要。最新の一覧と用途は[`src/types.ts`](src/types.ts)の`Env`を参照。
 
 ```text
 CLOUDFLARE_ACCOUNT_ID
@@ -108,19 +108,19 @@ FIRECRAWL_API_KEY
 X_BEARER_TOKEN
 ```
 
-Secretは個別に登録します。
+Secretは個別に登録。
 
 ```powershell
 pnpm wrangler secret put <NAME>
 ```
 
-AI Gatewayの作成・更新には、`AI Gateway Read`と`AI Gateway Write`権限を持つCloudflare API tokenを環境変数へ設定し、次を実行します。
+AI Gatewayの作成・更新には、`AI Gateway Read`と`AI Gateway Write`権限を持つCloudflare API tokenを環境変数へ設定し、次を実行。
 
 ```powershell
 pnpm setup:aigw
 ```
 
-Slack AppはDMの`message.im`をEvents APIで受信し、Interactivityで片付けのボタンを処理します。Request URLは両方とも`/slack/events`です（[ADR 0014](docs/adr/0014-slack-edge-for-the-boundary.md)）。GitHub Appには保存先リポジトリだけを対象とした`Contents: Read and write`権限を与えます。
+Slack AppはDMの`message.im`をEvents APIで受信し、Interactivityで片付けのボタンを処理する。Request URLは両方とも`/slack/events`（[ADR 0014](docs/adr/0014-slack-edge-for-the-boundary.md)）。GitHub Appには保存先リポジトリだけを対象とした`Contents: Read and write`権限を与える。
 
 ### 検証
 
@@ -132,14 +132,14 @@ pnpm wrangler deploy --dry-run
 
 ## 制約
 
-- 単一のSlackワークスペースとユーザーをallowlistで許可する個人利用向けです。
-- XはAPIから取得できる公開Postだけを対象とし、protected contentは保存しません。
-- 週次ダイジェストは「読んだか」ではなく「片付けたか」だけを管理します。
-- 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しません。
+- 単一のSlackワークスペースとユーザーをallowlistで許可する個人利用向け。
+- XはAPIから取得できる公開Postだけを対象とし、protected contentは保存しない。
+- 週次ダイジェストは「読んだか」ではなく「片付けたか」だけを管理。
+- 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しない。
 
 ## 設計判断
 
-主要な設計判断と代替案は[`docs/adr/`](docs/adr/)に記録しています。
+主要な設計判断と代替案は[`docs/adr/`](docs/adr/)に記録。
 
 - [Slackの入力をすべてAIへ渡し、保存をツールにする](docs/adr/0006-agent-with-save-tool.md)
 - [スレッドの会話履歴をDurable Objectsに保存する](docs/adr/0007-thread-history-in-durable-object.md)
