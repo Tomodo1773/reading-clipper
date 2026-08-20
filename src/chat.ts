@@ -1,9 +1,15 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { APICallError } from '@ai-sdk/provider';
-import { generateText, type ModelMessage, RetryError, stepCountIs } from 'ai';
+import {
+  generateText,
+  type ModelMessage,
+  RetryError,
+  type StaticToolResult,
+  stepCountIs,
+} from 'ai';
 import { ClipError } from './errors';
 import { createTools } from './tools';
-import type { Env } from './types';
+import type { Env, SavedClip } from './types';
 
 const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通して「要するに何なのか」を教えてくれる、面倒見のいい年上のお姉さんです。SlackのDMで、一人の相手とだけ話しています。
 
@@ -13,6 +19,8 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 - 本文は会話の中に残る。同じ記事について改めて聞かれても、ツールを呼び直さずに手元の本文を読んで答える。
 - 会話の中で事実の裏取りが要るときは、google_searchでWebを調べてから答える。
 - 日曜の朝に、まだ片付いていないクリップをまとめて送る。そのスレッドで「もういい」「片付けて」と言われたら、set_clip_dismissedで印を付ける。「戻して」なら同じツールにfalseを渡す。
+- 保存済みのクリップを、find_clipsで題名やURLの一部から探す。会話にまだ出ていないクリップを片付けたり消したりするときは、まずこれで探す。
+- 保存そのものが失敗していたクリップを、delete_clipでGitHubのファイルごと消す。
 - URLと関係のない話も普通にする。
 
 # URLが来たとき
@@ -45,6 +53,17 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 - 1回につき1件。まとめて片付けてと言われても、対象を1つずつ確かめてから付ける。
 - updatedがfalseなら印は付いていない。unknown_pathはそのパスが見つからなかったということ。付いたことにしない。
 - 読んだかどうかを記録しているわけではないので、「既読にした」とは言わない。
+
+# 消すとき
+- 「片付ける」と「消す」は違う。読まないと決めただけならset_clip_dismissedで印を付ける。保存そのものが失敗していたならdelete_clipで消す。
+- 消すのは、本文が入っていない、記事の概要しか保存されていない、記事ではない別のページが保存されている、といったとき。内容が期待外れだっただけなら消さずに片付ける。
+- 消す前に必ずfind_clipsで探す。delete_clipはfind_clipsがいま返したrefしか受け取らない。パスや題名を自分で組み立てても消せない。
+- 見つかったものが複数あって1つに絞れないときは、消さずにどれのことか聞き返す。0件なら見つからなかったと言う。当てずっぽうで消さない。
+- 1回につき1件。まとめて消してと言われても、対象を1つずつ確かめてから消す。
+- 自分から消すことを提案しない。はっきり消してと言われたときだけ実行する。保存が壊れていそうなときは、その事実だけを伝える。
+- deletedがfalseなら消えていない。unknown_refはその番号が今のやり取りに無いということなので、find_clipsから探し直す。消せたことにしない。
+- githubがmissingなら、台帳にはあったがファイルは既に無かったということ。記録は消えている。
+- 消したものは、同じURLをもう一度送れば保存し直せる。
 
 # 深掘りに答えるとき
 - 長さの縛りは外してよい。ただしSlackのチャットに収まる範囲にする。
@@ -98,13 +117,15 @@ function createProvider(env: Env) {
  *
  * 返す`appended`は、このターンで会話へ追加された分だけ。呼び出し側が成功後にまとめて永続化する。
  * 途中で投げた場合は何も追加されないので、Queueが再試行しても履歴が壊れない（ADR 0007）。
+ *
+ * `saved`はこのターンで保存できたクリップ。返信へ付けるボタンの有無はこれで決まる（ADR 0015）。
  */
 export async function runChatTurn(options: {
   env: Env;
   history: ModelMessage[];
   userText: string;
   receivedAt: string;
-}): Promise<{ appended: ModelMessage[]; reply: string }> {
+}): Promise<{ appended: ModelMessage[]; reply: string; saved: SavedClip[] }> {
   const userMessage: ModelMessage = { role: 'user', content: options.userText };
 
   const google = createProvider(options.env);
@@ -143,5 +164,33 @@ export async function runChatTurn(options: {
 
   const reply = result.text.trim();
   if (!reply) throw new ClipError('AI response contained no text', 'chat', true);
-  return { appended: [userMessage, ...result.responseMessages], reply };
+  return {
+    appended: [userMessage, ...result.responseMessages],
+    reply,
+    saved: savedClips(result.staticToolResults),
+  };
+}
+
+/**
+ * このターンで保存できたクリップを、返信の文面ではなく`save_loaded`の実行結果から取る。
+ *
+ * ここで読むのはモデルが書いた文字列ではなく、ツール自身が返したオブジェクトである。
+ * 保存が起きたかどうかは確定した構造として手元にあるので、文面を解析しない（ADR 0015）。
+ *
+ * 見るのは`staticToolResults`で、全ステップぶんが入る。`toolResults`は最終ステップだけなので、
+ * 保存の後にモデルがもう1手を挟んだターンで取りこぼす。
+ * 同じ記事を2回渡されても保存先は同じなので、パスで重ねる。
+ */
+function savedClips(
+  toolResults: StaticToolResult<ReturnType<typeof createTools>>[],
+): SavedClip[] {
+  const saved = new Map<string, SavedClip>();
+  for (const toolResult of toolResults) {
+    if (toolResult.toolName !== 'save_loaded') continue;
+    const output = toolResult.output;
+    // 失敗のときの戻り値には`path`が無い。保存できたものだけをボタンにする。
+    if (!output.saved || !('path' in output)) continue;
+    saved.set(output.path, { path: output.path, title: output.title });
+  }
+  return [...saved.values()];
 }

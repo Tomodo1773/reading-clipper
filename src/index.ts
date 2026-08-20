@@ -1,5 +1,6 @@
 import { type ButtonAction, type MessageBlockAction, SlackApp } from 'slack-edge';
-import { DISMISS_ACTION_ID, dismissDigestClip, runWeeklyDigest } from './digest';
+import { runWeeklyDigest } from './digest';
+import { DISMISS_ACTION_ID, dismissClip } from './dismiss';
 import { handleQueueMessage } from './processor';
 import type { ChatJob, Env } from './types';
 
@@ -65,16 +66,18 @@ function slackApp(env: Env): SlackApp<Env> {
       ]);
     })
     // ボタン押下はAIを経由せず直接D1を更新する（ADR 0010）。
+    // ダイジェストの行も、クリップ直後の返信も、同じボタンで同じように片付く（ADR 0015）。
     .action<'button', MessageBlockAction<ButtonAction>>(
       { type: 'button', action_id: DISMISS_ACTION_ID },
       async () => {},
       async ({ payload }) => {
         const path = payload.actions[0]?.value;
         if (!path) return;
-        await dismissDigestClip(env, {
+        await dismissClip(env, {
           path,
           channel: payload.channel.id,
           messageTs: payload.message.ts,
+          text: payload.message.text,
           blocks: payload.message.blocks ?? [],
         });
       },

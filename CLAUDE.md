@@ -12,6 +12,26 @@
 - README.mdに記載された制約と、関連するADRを実装前に確認してください。
 - 依存関係の取得・更新は、Socket Firewall（`sfw`）経由で実行します。lockfileを管理し、CIではlockfileを変更しません。
 
+## モジュール構成
+
+| ファイル | 責務 |
+|---|---|
+| `src/index.ts` | Slack受付（slack-edge）、Queueへの登録、cronの入口。ここでは積むだけです |
+| `src/processor.ts` | Queue consumer。1ジョブの実行とエラーのステージ分類 |
+| `src/chat.ts` | AI SDKでのモデル呼び出し1ターン |
+| `src/tools.ts` | モデルへ渡すツール定義（読む／保存する／探す／消す） |
+| `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
+| `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / Firecrawl） |
+| `src/url.ts` | canonical化、種別判定、保存先パスの決定 |
+| `src/github.ts` | GitHub App認証とContents API |
+| `src/markdown.ts` | 保存するMarkdownの組み立て |
+| `src/clip-index.ts` / `src/clip-index-format.ts` | 新着一覧のGitHub同期と、importなしのMarkdown生成・生成物識別 |
+| `src/clips.ts` | D1へのアクセス。読書状態の注釈レイヤーです |
+| `src/digest.ts` | 週次ダイジェストの組み立て |
+| `src/dismiss.ts` | 片付けのボタンと押下処理。ダイジェストの行と、クリップ直後の返信で共通です |
+| `src/errors.ts` | `ClipError` と `ProcessingStage`。失敗をどの段階のものとして扱うか |
+| `src/excerpt.ts` / `src/html.ts` | Worker側とNode側（バックフィル）の両方から呼びます。同じ入力から必ず同じ結果を出す必要があるため、**何もimportしない**制約があります |
+
 ## 開発
 
 package managerはpnpmで、versionは `package.json` の `packageManager` で固定しています。CI側に別途versionを書かないでください。
@@ -19,17 +39,21 @@ package managerはpnpmで、versionは `package.json` の `packageManager` で�
 | 目的 | コマンド |
 |---|---|
 | 依存の取得 | `sfw pnpm install` |
+| テスト | `pnpm test` |
 | 型検査 | `pnpm typecheck` |
 | Worker設定の検証 | `pnpm wrangler deploy --dry-run` |
 | ローカル起動 | `pnpm dev` |
 | AI Gatewayの作成・更新 | `pnpm setup:aigw` |
 | D1スキーマの適用 | `pnpm wrangler d1 execute reading-clipper-clips-db --local --file=./schema.sql`（本番は `--remote`） |
+| D1のバックフィル | 手順は [`scripts/backfill-clips.ts`](scripts/backfill-clips.ts) の冒頭コメント。GitHubからD1を作り直します |
+
+`pnpm dev` はローカルのsecretを `.dev.vars` から読みます（gitignore済み）。必要なキーは [`src/types.ts`](src/types.ts) の `Env` です。
 
 D1のスキーマは `wrangler deploy` では適用されません。`schema.sql` を変更したら `--remote` と `--local` の両方へ手で流してください。`pnpm test` は `schema.sql` をそのまま読んでテーブルを作るため、事前準備は要りません。
 
 `schema.sql` は `CREATE TABLE IF NOT EXISTS` の1文だけで構成します。テストが全体を1文として `prepare().run()` へ流すため、2文目を書くとテストが壊れます。既存のテーブルへ列を足すときは、`CREATE TABLE` の定義に列を書いたうえで、`ALTER TABLE` を `--command` で別途手で流してください。
 
-`pnpm typecheck` は `wrangler types` で `worker-configuration.d.ts` を生成してから、スクリプト用（`tsconfig.json`）とWorker用（`src/tsconfig.json`）の2つを検査します。Workersのグローバル型とNodeの型は `fetch` などの定義が衝突するため、意図的に分けています。
+`pnpm typecheck` は `wrangler types` で `worker-configuration.d.ts` を生成してから、スクリプト用（`tsconfig.json`）、Worker用（`src/tsconfig.json`）、テスト用（`test/tsconfig.json`）の3つを検査します。Workersのグローバル型とNodeの型は `fetch` などの定義が衝突するため、意図的に分けています。
 
 `pnpm setup:aigw` には `CLOUDFLARE_ACCOUNT_ID` と、`AI Gateway Read` / `AI Gateway Write` 権限を持つ `CLOUDFLARE_API_TOKEN` が必要です。
 
@@ -47,11 +71,27 @@ Cloudflareのリソースは `wrangler.jsonc` とWranglerを正本として管�
 
 AI GatewayだけはWranglerにコマンドが無いため、`scripts/setup-ai-gateway.ts` がCloudflare APIを直接呼びます。設定を変えるときは、ダッシュボードではなくこのスクリプトを編集してください。ゲートウェイのIDは `wrangler.jsonc` の `vars.AI_GATEWAY_ID` と一致させる必要があります。
 
+## デプロイ
+
+`wrangler deploy` を手で打ちません。Cloudflare Workers BuildsのGitHub連携が、`main` へのpushで自動デプロイします。Git連携の接続だけはコード化する手段が無く、ダッシュボードでの手動設定です（[ADR 0001](docs/adr/0001-wrangler-over-opentofu.md)）。
+
+`main` へは直接pushできません。branch protectionにより、変更はPull Request経由で、`build` と `agent-docs-sync` のcheckを通してからmergeします。この保護はadminにも適用されます。承認は不要（required approvals: 0）ですが、PRを作る手順は省略できません。
+
+`wrangler.jsonc` に書いてもデプロイでは作られないものがあります。
+
+| 対象 | 作り方 |
+|---|---|
+| Queue本体、dead letter queue | `pnpm wrangler queues create` |
+| D1データベース本体 | `pnpm wrangler d1 create` |
+| D1のスキーマ | `schema.sql` を `d1 execute` で手動適用（上の表を参照） |
+| Durable Objectのクラス | `wrangler.jsonc` の `migrations` により自動。コマンド不要 |
+| Worker Secrets | `pnpm wrangler secret put <NAME>` |
+
 ## 共通ポリシーの例外
 
 Cloudflare Workers Builds内の依存取得にはSocket Firewallを使いません。ビルド環境に `sfw` が用意されておらず、導入するには生のpackage managerを使うことになり、かえってポリシーに反するためです。
 
-代わりにlockfileを必須とし、install commandを `pnpm install --frozen-lockfile` にしてlockfileの変更を拒否します。ローカルとGitHub ActionsのCIでは従来どおり `sfw` を経由します。
+代わりにlockfileを必須とします。Workers Buildsにはinstall commandの入力欄が無いため、Build variable `SKIP_DEPENDENCY_INSTALL=1` で自動取得を止め、build commandを `pnpm install --frozen-lockfile` にしてlockfileの変更を拒否します。ローカルとGitHub ActionsのCIでは従来どおり `sfw` を経由します。
 
 ## 指示ファイルの同期
 

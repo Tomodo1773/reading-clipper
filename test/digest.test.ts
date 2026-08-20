@@ -1,7 +1,8 @@
 import { env as testEnv } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DigestClip } from '../src/clips';
-import { digestBlocks, keepClipBlocks, runWeeklyDigest } from '../src/digest';
+import { digestBlocks, runWeeklyDigest } from '../src/digest';
+import { keepAliveClips } from '../src/dismiss';
 import { resetGitHubTokenCache } from '../src/github';
 import type { ThreadAgent } from '../src/thread';
 import type { Env } from '../src/types';
@@ -34,7 +35,7 @@ function threadStub(): Stub {
 interface SlackCalls {
   bodies: Record<string, Record<string, unknown>>;
   imageRequests: string[];
-  /** 実在確認でGitHubへ引きにいったパス（ADR 0015）。 */
+  /** 実在確認でGitHubへ引きにいったパス（ADR 0018）。 */
   contentRequests: string[];
 }
 
@@ -59,7 +60,7 @@ function mockSlack(github: GitHubState = {}): SlackCalls {
   const calls: SlackCalls = { bodies: {}, imageRequests: [], contentRequests: [] };
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input);
-    // ダイジェストは投稿前に、出す候補がGitHubに残っているかを引く（ADR 0015）。
+    // ダイジェストは投稿前に、出す候補がGitHubに残っているかを引く（ADR 0018）。
     if (url.includes('/app/installations/')) {
       return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
     }
@@ -188,7 +189,9 @@ describe('weekly digest', () => {
     expect(posted.channel).toBe('D123');
     // 見出しと区切り、そのあとクリップごとに section + actions + context の3ブロック。
     expect(posted.blocks).toHaveLength(8);
-    expect(JSON.stringify(posted.blocks[0])).toContain('2件');
+    // 件数は見出しに持たない。押すたびに数え直すことになるため（ADR 0015）。
+    expect(slack.bodies['chat.postMessage']).toMatchObject({ text: '片付いていないクリップが2件' });
+    expect(JSON.stringify(posted.blocks[0])).not.toContain('2件');
 
     const groups = groupsOf(posted.blocks);
     expect(Object.keys(groups)).toEqual(['clip-0', 'clip-1']);
@@ -325,7 +328,7 @@ describe('weekly digest', () => {
   });
 
   it('drops a clip whose file is gone from GitHub, and deletes the row', async () => {
-    // GitHubから消す操作は「片付ける」より強い意思表示なので、出し直さない（ADR 0015）。
+    // GitHubから消す操作は「片付ける」より強い意思表示なので、出し直さない（ADR 0018）。
     await seed([{ path: 'clips/消した記事.md' }, { path: 'clips/残した記事.md' }]);
     const slack = mockSlack({ missing: ['clips/消した記事.md'] });
 
@@ -356,7 +359,7 @@ describe('weekly digest', () => {
   });
 
   it('fills the digest from the extra candidates when one is gone', async () => {
-    // 候補を7件より多めに取るのは、消えたぶんを埋めるため（ADR 0015）。
+    // 候補を7件より多めに取るのは、消えたぶんを埋めるため（ADR 0018）。
     await seed(Array.from({ length: 9 }, (_, index) => ({ path: `clips/記事${index}.md` })));
     const slack = mockSlack({ missing: ['clips/記事0.md'] });
 
@@ -377,18 +380,17 @@ describe('weekly digest', () => {
   });
 });
 
-describe('keepClipBlocks', () => {
-  it('keeps only the rows that are still waiting and counts down the heading', () => {
+describe('keepAliveClips', () => {
+  it('keeps only the rows that are still waiting', () => {
     const blocks = digestBlocks(makeEnv(), [
       digestClip({ path: 'clips/a.md', url: 'https://example.com/a' }),
       digestClip({ path: 'clips/b.md', url: 'https://example.com/b' }),
     ]);
 
-    const remaining = keepClipBlocks(blocks, new Set(['clips/b.md']));
+    const remaining = keepAliveClips(blocks, new Set(['clips/b.md']));
 
-    // 見出しと区切り、そのあと残った1件ぶんの3ブロック。
+    // 見出しと区切りはクリップの組に属さないので、そのまま残る。
     expect(remaining).toHaveLength(5);
-    expect(JSON.stringify(remaining[0])).toContain('1件');
     expect(JSON.stringify(remaining)).toContain('clips/b.md');
     expect(JSON.stringify(remaining)).not.toContain('clips/a.md');
   });
@@ -403,7 +405,7 @@ describe('keepClipBlocks', () => {
       }),
     ]);
 
-    const remaining = keepClipBlocks(blocks, new Set(['clips/b.md']));
+    const remaining = keepAliveClips(blocks, new Set(['clips/b.md']));
 
     expect(remaining.map((block) => block.type)).toEqual([
       'header',
@@ -416,15 +418,16 @@ describe('keepClipBlocks', () => {
     expect(JSON.stringify(remaining)).toContain('zenn.dev');
   });
 
-  it('leaves only the heading when the last row goes', () => {
+  it('leaves the heading when the last row goes', () => {
     const blocks = digestBlocks(makeEnv(), [digestClip({ path: 'clips/a.md' })]);
 
-    const remaining = keepClipBlocks(blocks, new Set());
+    const remaining = keepAliveClips(blocks, new Set());
 
-    expect(remaining).toHaveLength(2);
-    expect(JSON.stringify(remaining)).toContain('いまは残っていない');
+    expect(remaining.map((block) => block.type)).toEqual(['header', 'divider']);
   });
+});
 
+describe('digestBlocks', () => {
   it('escapes a pipe in the article URL so the link does not break', () => {
     const blocks = digestBlocks(makeEnv(), [
       digestClip({ path: 'clips/記事.md', url: 'https://example.com/a?x=b|c' }),

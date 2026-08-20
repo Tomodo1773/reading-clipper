@@ -457,12 +457,17 @@ async function fetchWeb(url: URL, env: Env): Promise<FetchedBody> {
         url: url.toString(),
         formats: ['markdown'],
         onlyMainContent: true,
-        // onlyMainContentのDOMフィルタを抜けた目次や関連記事を、LLMで落とす。
-        onlyCleanContent: true,
+        // `onlyCleanContent`は付けない。boilerplateを削るのではなく、LLMがMarkdown全体を
+        // 出力し直す実装で、日本語の長い記事では本文の脱落と表の書き換えが起きる。
+        // 所要も4秒から150秒へ延び、こちらのtimeoutに間に合わない。
+        //
+        // `timeout`は明示しないと効かない。省くと応答が返らないまま数分待たされるが、
+        // 渡せば失敗理由の入った408が返る。
+        timeout: 45_000,
       }),
     },
-    // Firecrawl側のtimeoutは既定で60秒。同じ値にすると必ずこちらが先に中断し、
-    // Firecrawlが返す失敗理由を受け取れなくなるため、余裕を持たせる。
+    // Firecrawlの`timeout`は目安で、実測では10秒ほど超えてから408が返る。
+    // それを待ち切れる値にして、Firecrawlが書いた失敗理由をログへ残す。
     75_000,
     'fetch',
   );

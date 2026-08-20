@@ -17,6 +17,15 @@ export interface ChatJob {
   receivedAt: string;
 }
 
+/**
+ * 1ターンで保存できたクリップ。返信へ付ける「片付ける」ボタンの材料になる（ADR 0015）。
+ * 保存が起きたかどうかはモデルの文面ではなくツールの実行結果で判定する。
+ */
+export interface SavedClip {
+  path: string;
+  title: string;
+}
+
 export interface FetchedContent {
   canonicalUrl: string;
   source: ClipSource;

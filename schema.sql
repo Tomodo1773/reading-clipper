@@ -4,7 +4,7 @@
 -- 本文・タイトル・ホストの正本はGitHubにあり、失われても母集団は
 -- Trees APIから再構成できる（scripts/backfill-clips.ts）。
 --
--- 適用（wrangler migrationsは使わない。README「インフラ管理とデプロイ」を参照）:
+-- 適用（wrangler migrationsは使わない。CLAUDE.md「デプロイ」を参照）:
 --   pnpm wrangler d1 execute reading-clipper-clips-db --remote --file=./schema.sql
 --   pnpm wrangler d1 execute reading-clipper-clips-db --local  --file=./schema.sql
 --

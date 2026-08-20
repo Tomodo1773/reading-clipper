@@ -4,7 +4,7 @@ import type { Env } from './types';
 export const DIGEST_SIZE = 7;
 
 /**
- * 台帳から取る候補の件数（ADR 0015）。
+ * 台帳から取る候補の件数（ADR 0018）。
  *
  * 投稿の直前にGitHub上の実在を確かめて消えた行を落とすので、ちょうど7件だけ取ると
  * 落ちたぶんが埋まらない。3件までなら消えていても7件を保てる、という意味の余りである。
@@ -12,15 +12,42 @@ export const DIGEST_SIZE = 7;
  */
 const DIGEST_CANDIDATES = DIGEST_SIZE + 3;
 
-export interface DigestClip {
+/** 1回の検索で返す件数の上限。結果はモデルの文脈に入るので、全件は返さない（ADR 0016）。 */
+const SEARCH_SIZE = 8;
+
+/** GitHubのclips/直下で見せる新着件数。保存総数には連動させない（ADR 0017）。 */
+const RECENT_CLIP_SIZE = 20;
+
+/** 台帳の1行のうち、読み出す用途によらず要る部分。 */
+export interface ClipRow {
   path: string;
   /** 記事のcanonical URL。NULLの行はGitHubのファイルへリンクする。 */
   url: string | null;
   /** 記事タイトル。NULLならパス末尾から導出する（ADR 0011）。 */
   title: string | null;
+  clippedAt: string;
+}
+
+/** 週次ダイジェストに出す1件。表示に使う列を余分に読む（ADR 0011）。 */
+export interface DigestClip extends ClipRow {
   excerpt: string | null;
   imageUrl: string | null;
-  clippedAt: string;
+}
+
+/** 検索で見つけたクリップ。片付いているかどうかも返す（ADR 0016）。 */
+export interface FoundClip extends ClipRow {
+  dismissedAt: string | null;
+}
+
+/**
+ * その行をどの題名で呼ぶか。
+ *
+ * ADR 0005でファイル名を記事タイトルそのものにしたので、`title`が無い行（バックフィル由来）
+ * でもパスから読める題名が取れる。ただし長い題名はファイル名にした時点で削られている。
+ */
+export function clipTitle(clip: ClipRow): string {
+  if (clip.title) return clip.title;
+  return (clip.path.split('/').pop() ?? clip.path).replace(/\.md$/, '');
 }
 
 /** 保存時に台帳へ書く値。表示に使うものはここで複製する（ADR 0011）。 */
@@ -61,7 +88,7 @@ function placeholders(count: number): string {
 }
 
 /**
- * 次のダイジェストの候補を選ぶ。出す7件ではなく、少し多めの候補を返す（ADR 0015）。
+ * 次のダイジェストの候補を選ぶ。出す7件ではなく、少し多めの候補を返す（ADR 0018）。
  *
  * `last_shown_at ASC`はSQLiteがNULLを先頭へ置くため、未提示が最優先になる。
  * その中を`clipped_at DESC`にすることで、昨日保存した記事が在庫の後ろで
@@ -80,20 +107,17 @@ export async function selectDigestClips(env: Env): Promise<DigestClip[]> {
   return results;
 }
 
-/**
- * 台帳から行を消す。GitHubに正本が無くなった行にだけ使う（ADR 0015）。
- *
- * `dismissed_at`ごと消えるので、同じ記事を保存し直すと片付けの記録は残らない。
- * 正本が消えている以上、注釈だけ残しても注釈する対象が無い。
- *
- * 渡すのはダイジェストの候補（10件前後）に限る。D1のbound parameterは1クエリ100個までで、
- * 台帳の全件を渡す使い方をするならここに分割が要る。
- */
-export async function deleteClips(env: Env, paths: string[]): Promise<void> {
-  if (paths.length === 0) return;
-  await env.CLIPS.prepare(`DELETE FROM clips WHERE path IN (${placeholders(paths.length)})`)
-    .bind(...paths)
-    .run();
+/** 保存構造とは別の新着ビューを組み立てるため、片付け済みも含めて新しい順に読む。 */
+export async function selectRecentClips(env: Env): Promise<ClipRow[]> {
+  const { results } = await env.CLIPS.prepare(
+    `SELECT path, url, title, clipped_at AS clippedAt
+       FROM clips
+      ORDER BY clipped_at DESC, path ASC
+      LIMIT ?`,
+  )
+    .bind(RECENT_CLIP_SIZE)
+    .all<ClipRow>();
+  return results;
 }
 
 /**
@@ -137,5 +161,49 @@ export async function setClipDismissed(
   const { meta } = await env.CLIPS.prepare('UPDATE clips SET dismissed_at = ? WHERE path = ?')
     .bind(dismissed ? at : null, path)
     .run();
+  return meta.changes > 0;
+}
+
+/**
+ * LIKEのメタ文字を打ち消す。素通しにすると`%`1文字で全件一致になる。
+ * エスケープ文字自身も対象に含める。含めないと、語に混じった`\`が後続の1文字を無効にする。
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+/**
+ * 題名・URL・パスの部分一致でクリップを探す（ADR 0016）。
+ *
+ * 片付け済みも返す。ダイジェストの母集団と違い、片付けたつもりのゴミを
+ * 後から消したくなる場面があるため、`dismissed_at`では絞らない。
+ *
+ * `title`がNULLの行（バックフィル由来）があるので、パスも一致の対象にする。
+ * 全文検索の索引は持たない。個人利用の規模では部分一致1本で足りる。
+ */
+export async function findClips(env: Env, query: string): Promise<FoundClip[]> {
+  const pattern = `%${escapeLike(query)}%`;
+  const { results } = await env.CLIPS.prepare(
+    `SELECT path, title, url, clipped_at AS clippedAt, dismissed_at AS dismissedAt
+       FROM clips
+      WHERE title LIKE ? ESCAPE '\\'
+         OR url LIKE ? ESCAPE '\\'
+         OR path LIKE ? ESCAPE '\\'
+      ORDER BY clipped_at DESC
+      LIMIT ?`,
+  )
+    .bind(pattern, pattern, pattern, SEARCH_SIZE)
+    .all<FoundClip>();
+  return results;
+}
+
+/**
+ * 台帳から行ごと消す（ADR 0016）。
+ *
+ * 片付けの印とは別で、保存そのものを無かったことにする操作の片割れである。
+ * もう片方のGitHubのファイルを先に消してから呼ぶ。戻り値はそのパスが台帳にあったかどうか。
+ */
+export async function deleteClip(env: Env, path: string): Promise<boolean> {
+  const { meta } = await env.CLIPS.prepare('DELETE FROM clips WHERE path = ?').bind(path).run();
   return meta.changes > 0;
 }
