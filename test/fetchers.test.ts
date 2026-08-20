@@ -146,7 +146,7 @@ describe('source fetchers', () => {
       url: 'https://example.com/article',
       formats: ['markdown'],
       onlyMainContent: true,
-      onlyCleanContent: true,
+      timeout: 45_000,
     });
   });
 
