@@ -114,15 +114,17 @@ describe('selectDigestClips', () => {
     ]);
   });
 
-  it('returns exactly seven clips however many are waiting', async () => {
+  it('caps the candidates however many are waiting', async () => {
+    // 返すのは出す7件ではなく候補10件（ADR 0015）。GitHubから消えた行を落としたあとに
+    // 7件を保つための余りで、7件へ切るのはダイジェスト側。
     await seed(
-      Array.from({ length: 9 }, (_unused, index) => ({
+      Array.from({ length: 14 }, (_unused, index) => ({
         path: `clips/${index}.md`,
-        clippedAt: `2026-08-0${index + 1}T00:00:00.000Z`,
+        clippedAt: `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
       })),
     );
 
-    expect(await selectDigestClips(env)).toHaveLength(7);
+    expect(await selectDigestClips(env)).toHaveLength(10);
   });
 });
 

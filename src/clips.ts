@@ -1,7 +1,16 @@
 import type { Env } from './types';
 
 /** 1回のダイジェストで出す件数。保存量に連動させない（ADR 0010）。 */
-const DIGEST_SIZE = 7;
+export const DIGEST_SIZE = 7;
+
+/**
+ * 台帳から取る候補の件数（ADR 0015）。
+ *
+ * 投稿の直前にGitHub上の実在を確かめて消えた行を落とすので、ちょうど7件だけ取ると
+ * 落ちたぶんが埋まらない。3件までなら消えていても7件を保てる、という意味の余りである。
+ * 余った候補は捨てるだけで、`last_shown_at`は出した7件にしか打たない。
+ */
+const DIGEST_CANDIDATES = DIGEST_SIZE + 3;
 
 export interface DigestClip {
   path: string;
@@ -52,7 +61,7 @@ function placeholders(count: number): string {
 }
 
 /**
- * 次のダイジェストに出す7件を選ぶ。
+ * 次のダイジェストの候補を選ぶ。出す7件ではなく、少し多めの候補を返す（ADR 0015）。
  *
  * `last_shown_at ASC`はSQLiteがNULLを先頭へ置くため、未提示が最優先になる。
  * その中を`clipped_at DESC`にすることで、昨日保存した記事が在庫の後ろで
@@ -66,9 +75,25 @@ export async function selectDigestClips(env: Env): Promise<DigestClip[]> {
       ORDER BY last_shown_at ASC, clipped_at DESC
       LIMIT ?`,
   )
-    .bind(DIGEST_SIZE)
+    .bind(DIGEST_CANDIDATES)
     .all<DigestClip>();
   return results;
+}
+
+/**
+ * 台帳から行を消す。GitHubに正本が無くなった行にだけ使う（ADR 0015）。
+ *
+ * `dismissed_at`ごと消えるので、同じ記事を保存し直すと片付けの記録は残らない。
+ * 正本が消えている以上、注釈だけ残しても注釈する対象が無い。
+ *
+ * 渡すのはダイジェストの候補（10件前後）に限る。D1のbound parameterは1クエリ100個までで、
+ * 台帳の全件を渡す使い方をするならここに分割が要る。
+ */
+export async function deleteClips(env: Env, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  await env.CLIPS.prepare(`DELETE FROM clips WHERE path IN (${placeholders(paths.length)})`)
+    .bind(...paths)
+    .run();
 }
 
 /**

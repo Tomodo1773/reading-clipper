@@ -2,8 +2,10 @@ import { env as testEnv } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DigestClip } from '../src/clips';
 import { digestBlocks, keepClipBlocks, runWeeklyDigest } from '../src/digest';
+import { resetGitHubTokenCache } from '../src/github';
 import type { ThreadAgent } from '../src/thread';
-import { jsonResponse, makeEnv, readSlackCall, resetClips } from './helpers';
+import type { Env } from '../src/types';
+import { generatePrivateKeyPem, jsonResponse, makeEnv, readSlackCall, resetClips } from './helpers';
 
 interface Stub {
   namespace: DurableObjectNamespace<ThreadAgent>;
@@ -32,6 +34,17 @@ function threadStub(): Stub {
 interface SlackCalls {
   bodies: Record<string, Record<string, unknown>>;
   imageRequests: string[];
+  /** 実在確認でGitHubへ引きにいったパス（ADR 0015）。 */
+  contentRequests: string[];
+}
+
+/**
+ * GitHub側の応答。`missing`のパスは404を返し、`status`を渡すと全件その状態で失敗させる。
+ * 「消えた」と「確かめられなかった」を区別するテストのために分けている。
+ */
+interface GitHubState {
+  missing?: string[];
+  status?: number;
 }
 
 function imageResponse(contentType = 'image/png'): Response {
@@ -42,10 +55,24 @@ function imageResponse(contentType = 'image/png'): Response {
  * `https://img.example.com/` は取得できる画像、`https://gone.example.com/` は404を返す。
  * サムネイルの検証がここを通るので、Slack以外のリクエストも受け付ける必要がある。
  */
-function mockSlack(): SlackCalls {
-  const calls: SlackCalls = { bodies: {}, imageRequests: [] };
+function mockSlack(github: GitHubState = {}): SlackCalls {
+  const calls: SlackCalls = { bodies: {}, imageRequests: [], contentRequests: [] };
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input);
+    // ダイジェストは投稿前に、出す候補がGitHubに残っているかを引く（ADR 0015）。
+    if (url.includes('/app/installations/')) {
+      return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+    }
+    if (url.includes('/repos/example/clips/contents/')) {
+      const path = decodeURIComponent(url.split('/contents/')[1] ?? '');
+      calls.contentRequests.push(path);
+      if (github.status) return jsonResponse({ message: 'boom' }, github.status);
+      if (github.missing?.includes(path)) return jsonResponse({ message: 'Not Found' }, 404);
+      return jsonResponse({
+        sha: 'file-sha',
+        html_url: `https://github.com/example/clips/blob/main/${path}`,
+      });
+    }
     if (url.startsWith('https://img.example.com/')) {
       calls.imageRequests.push(url);
       return imageResponse();
@@ -120,7 +147,18 @@ function groupsOf(blocks: unknown[]): Record<string, Record<string, unknown>[]> 
   return groups;
 }
 
-beforeEach(resetClips);
+let privateKeyPem: string;
+
+/** 実在確認がGitHub App JWTを署名するので、ダイジェストのテストには実鍵が要る。 */
+function digestEnv(overrides: Partial<Env> = {}): Env {
+  return makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem, ...overrides });
+}
+
+beforeEach(async () => {
+  resetGitHubTokenCache();
+  await resetClips();
+  privateKeyPem = await generatePrivateKeyPem();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe('weekly digest', () => {
@@ -139,7 +177,7 @@ describe('weekly digest', () => {
     const thread = threadStub();
 
     await runWeeklyDigest(
-      makeEnv({ THREAD: thread.namespace }),
+      digestEnv({ THREAD: thread.namespace }),
       new Date('2026-08-16T00:00:00.000Z'),
     );
 
@@ -193,7 +231,7 @@ describe('weekly digest', () => {
     ]);
     const slack = mockSlack();
 
-    await runWeeklyDigest(makeEnv({ THREAD: threadStub().namespace }));
+    await runWeeklyDigest(digestEnv({ THREAD: threadStub().namespace }));
 
     const posted = slack.bodies['chat.postMessage'] as { blocks: unknown[] };
     const section = groupsOf(posted.blocks)['clip-0']?.[0] as { accessory?: Record<string, unknown> };
@@ -216,7 +254,7 @@ describe('weekly digest', () => {
     ]);
     const slack = mockSlack();
 
-    await runWeeklyDigest(makeEnv({ THREAD: threadStub().namespace }));
+    await runWeeklyDigest(digestEnv({ THREAD: threadStub().namespace }));
 
     const posted = slack.bodies['chat.postMessage'] as { blocks: unknown[] };
     const groups = groupsOf(posted.blocks);
@@ -234,7 +272,7 @@ describe('weekly digest', () => {
     await seed([{ path: 'clips/記事.md', url: 'https://example.com/1', imageUrl: tooLong }]);
     const slack = mockSlack();
 
-    await runWeeklyDigest(makeEnv({ THREAD: threadStub().namespace }));
+    await runWeeklyDigest(digestEnv({ THREAD: threadStub().namespace }));
 
     const posted = slack.bodies['chat.postMessage'] as { blocks: unknown[] };
     expect((groupsOf(posted.blocks)['clip-0']?.[0] as { accessory?: unknown }).accessory).toBeUndefined();
@@ -246,14 +284,23 @@ describe('weekly digest', () => {
     await seed([{ path: 'clips/記事.md' }]);
     // cronは再試行されないので、先に印を打つと一度も出ないまま順番の後ろへ回る。
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      // 実在確認はここでは主題ではないので、素直に「残っている」を返す。
+      // 投げさせて`stillOnGitHub`に握り潰させると、このテストが通る理由が濁る。
+      if (url.includes('/app/installations/')) {
+        return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      if (url.includes('/repos/example/clips/contents/')) {
+        return jsonResponse({ sha: 'file-sha', html_url: 'https://github.com/example/clips' });
+      }
       if ((await readSlackCall(input))?.method === 'conversations.open') {
         return jsonResponse({ ok: false, error: 'missing_scope' });
       }
-      throw new Error(`unexpected request: ${String(input)}`);
+      throw new Error(`unexpected request: ${url}`);
     });
 
     await expect(
-      runWeeklyDigest(makeEnv({ THREAD: threadStub().namespace })),
+      runWeeklyDigest(digestEnv({ THREAD: threadStub().namespace })),
     ).rejects.toThrow('missing_scope');
 
     const row = await testEnv.CLIPS.prepare('SELECT last_shown_at FROM clips')
@@ -266,7 +313,7 @@ describe('weekly digest', () => {
     const thread = threadStub();
 
     await runWeeklyDigest(
-      makeEnv({ THREAD: thread.namespace }),
+      digestEnv({ THREAD: thread.namespace }),
       new Date('2026-08-16T00:00:00.000Z'),
     );
 
@@ -275,6 +322,58 @@ describe('weekly digest', () => {
     expect(JSON.stringify(posted.blocks)).toContain('いまは残っていない');
     // 会話へ残す中身が無いので、スレッドは作らない。
     expect(thread.names).toEqual([]);
+  });
+
+  it('drops a clip whose file is gone from GitHub, and deletes the row', async () => {
+    // GitHubから消す操作は「片付ける」より強い意思表示なので、出し直さない（ADR 0015）。
+    await seed([{ path: 'clips/消した記事.md' }, { path: 'clips/残した記事.md' }]);
+    const slack = mockSlack({ missing: ['clips/消した記事.md'] });
+
+    await runWeeklyDigest(digestEnv({ THREAD: threadStub().namespace }));
+
+    // 候補は投稿前に1件ずつ引く。ディレクトリ一覧もTrees APIも使わない。
+    expect(slack.contentRequests.sort()).toEqual(['clips/残した記事.md', 'clips/消した記事.md']);
+    const posted = slack.bodies['chat.postMessage'] as { blocks: unknown[] };
+    expect(Object.keys(groupsOf(posted.blocks))).toHaveLength(1);
+    expect(JSON.stringify(posted.blocks)).toContain('残した記事');
+    expect(JSON.stringify(posted.blocks)).not.toContain('消した記事');
+
+    const rows = await testEnv.CLIPS.prepare('SELECT path FROM clips').all<{ path: string }>();
+    expect(rows.results.map((row) => row.path)).toEqual(['clips/残した記事.md']);
+  });
+
+  it('keeps the clip when the check itself fails, instead of deleting the row', async () => {
+    // 「確かめられなかった」は「無い」ではない。GitHubが不調な週に台帳を削らない。
+    await seed([{ path: 'clips/記事.md' }]);
+    const slack = mockSlack({ status: 500 });
+
+    await runWeeklyDigest(digestEnv({ THREAD: threadStub().namespace }));
+
+    const posted = slack.bodies['chat.postMessage'] as { blocks: unknown[] };
+    expect(Object.keys(groupsOf(posted.blocks))).toHaveLength(1);
+    const rows = await testEnv.CLIPS.prepare('SELECT path FROM clips').all<{ path: string }>();
+    expect(rows.results).toHaveLength(1);
+  });
+
+  it('fills the digest from the extra candidates when one is gone', async () => {
+    // 候補を7件より多めに取るのは、消えたぶんを埋めるため（ADR 0015）。
+    await seed(Array.from({ length: 9 }, (_, index) => ({ path: `clips/記事${index}.md` })));
+    const slack = mockSlack({ missing: ['clips/記事0.md'] });
+
+    await runWeeklyDigest(
+      digestEnv({ THREAD: threadStub().namespace }),
+      new Date('2026-08-16T00:00:00.000Z'),
+    );
+
+    const posted = slack.bodies['chat.postMessage'] as { blocks: unknown[] };
+    expect(Object.keys(groupsOf(posted.blocks))).toHaveLength(7);
+    // 印が付くのは出した7件だけ。候補として引いただけの行には付かない。
+    const shown = await testEnv.CLIPS.prepare(
+      'SELECT count(*) AS n FROM clips WHERE last_shown_at IS NOT NULL',
+    ).first<{ n: number }>();
+    expect(shown?.n).toBe(7);
+    const rows = await testEnv.CLIPS.prepare('SELECT count(*) AS n FROM clips').first<{ n: number }>();
+    expect(rows?.n).toBe(8);
   });
 });
 

@@ -29,7 +29,7 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
 - **MarkdownをGitHubへ保存**
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存します。
 - **週次ダイジェストと片付け**
-  毎週日曜9時（JST）に、まだ片付けていないクリップを最大7件Slackへ投稿します。各記事はボタンまたはスレッド内の自然文で片付けられます。
+  毎週日曜9時（JST）に、まだ片付けていないクリップを最大7件Slackへ投稿します。各記事はボタンまたはスレッド内の自然文で片付けられます。GitHub上でMarkdownを直接消したクリップは、投稿の直前に実在を確かめて落とすため、ダイジェストには出てきません。
 
 ## 主な特徴・設計上のポイント
 
@@ -145,3 +145,4 @@ pnpm wrangler deploy --dry-run
 - [スレッドの会話履歴をDurable Objectsに保存する](docs/adr/0007-thread-history-in-durable-object.md)
 - [週次ダイジェストと片付け状態をD1で管理する](docs/adr/0010-weekly-digest-and-dismiss-bit.md)
 - [本文を読んでからAIが保存対象を決める](docs/adr/0012-load-content-then-save-loaded.md)
+- [GitHubから消えたクリップは出す直前の実在確認で落とす](docs/adr/0015-verify-clip-exists-before-digest.md)
