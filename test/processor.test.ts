@@ -119,8 +119,10 @@ describe('queue handler', () => {
 
     expect(thread.names).toEqual(['D123:1700000000.000100']);
     expect(posts.map((post) => post.text)).toEqual(['こんばんは。今日は何を読むの？']);
-    // 保存の無いターンなので、ボタンもblocksも付かない（ADR 0015）。
-    expect(posts[0]?.blocks).toBeUndefined();
+    // 保存の有無にかかわらず、モデルの標準MarkdownはMarkdown blockで出す（ADR 0019）。
+    expect(posts[0]?.blocks).toEqual([
+      { type: 'markdown', text: 'こんばんは。今日は何を読むの？' },
+    ]);
     // user と assistant の2件が、JSONのまま会話へ積まれる。
     expect(thread.saved).toHaveLength(1);
     expect(
@@ -138,10 +140,10 @@ describe('queue handler', () => {
 
     await handleQueueMessage(message, makeEnv({ THREAD: thread.namespace }));
 
-    // 通知に出る文は今までどおり返信そのもの。本文はsectionが持つ。
+    // 通知に出る文は今までどおり返信そのもの。本文はMarkdown blockが持つ。
     expect(posts[0]?.text).toBe('保存しておいたわ。');
     expect(posts[0]?.blocks).toEqual([
-      { type: 'section', text: { type: 'mrkdwn', text: '保存しておいたわ。' } },
+      { type: 'markdown', text: '保存しておいたわ。' },
       {
         type: 'actions',
         block_id: 'clip-0-act',

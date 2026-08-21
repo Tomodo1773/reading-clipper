@@ -1,5 +1,7 @@
 # ADR 0006: Slackの入力をすべてAIへ渡し、保存をツールにする
 
+> 返信形式をSlack独自の`mrkdwn`にする決定は、[ADR 0019](0019-slack-markdown-block-for-agent-replies.md)で標準MarkdownとMarkdown blockへ置き換えた。
+
 - ステータス: Accepted
 - 日付: 2026-08-16
 

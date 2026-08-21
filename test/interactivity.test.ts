@@ -15,6 +15,22 @@ import {
 const CLIP_PATH = 'clips/記事.md';
 const OTHER_PATH = 'clips/別の記事.md';
 
+describe('エージェント返信のblocks', () => {
+  it('keeps a reply at the Markdown block limit unchanged', () => {
+    const reply = 'あ'.repeat(12_000);
+
+    expect(clipReplyBlocks(reply, [])[0]).toEqual({ type: 'markdown', text: reply });
+  });
+
+  it('truncates an over-limit reply without splitting a surrogate pair', () => {
+    const reply = `${'あ'.repeat(11_998)}😀末尾`;
+    const block = clipReplyBlocks(reply, [])[0];
+
+    expect(block).toEqual({ type: 'markdown', text: `${'あ'.repeat(11_998)}😀…` });
+    expect([...(block?.type === 'markdown' ? block.text : '')]).toHaveLength(12_000);
+  });
+});
+
 /** 投稿されたダイジェストのblocks。押した時点のSlackのpayloadに丸ごと入ってくる。 */
 const POSTED_BLOCKS = digestBlocks(makeEnv(), [
   {
@@ -186,7 +202,7 @@ describe('ダイジェストのボタン押下', () => {
  */
 describe('返信のボタン押下', () => {
   const REPLY =
-    '要するにQueueで分けろという話よ。<https://github.com/example/clips/blob/main/a.md|GitHub>に置いたわ。';
+    '要するにQueueで分けろという話よ。[GitHub](https://github.com/example/clips/blob/main/a.md)に置いたわ。';
 
   function replyPress(path: string, clips: { path: string; title: string }[]) {
     return {
@@ -221,7 +237,7 @@ describe('返信のボタン押下', () => {
     expect((await dismissedAt(CLIP_PATH))?.dismissed_at).not.toBeNull();
     // 本文はクリップの組に属さないので残り、ボタンだけが消える。
     expect(updates[0]?.blocks).toEqual([
-      { type: 'section', text: { type: 'mrkdwn', text: REPLY } },
+      { type: 'markdown', text: REPLY },
     ]);
   });
 
