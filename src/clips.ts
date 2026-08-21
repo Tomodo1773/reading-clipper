@@ -1,7 +1,16 @@
 import type { Env } from './types';
 
 /** 1回のダイジェストで出す件数。保存量に連動させない（ADR 0010）。 */
-const DIGEST_SIZE = 7;
+export const DIGEST_SIZE = 7;
+
+/**
+ * 台帳から取る候補の件数（ADR 0018）。
+ *
+ * 投稿の直前にGitHub上の実在を確かめて消えた行を落とすので、ちょうど7件だけ取ると
+ * 落ちたぶんが埋まらない。3件までなら消えていても7件を保てる、という意味の余りである。
+ * 余った候補は捨てるだけで、`last_shown_at`は出した7件にしか打たない。
+ */
+const DIGEST_CANDIDATES = DIGEST_SIZE + 3;
 
 /** 1回の検索で返す件数の上限。結果はモデルの文脈に入るので、全件は返さない（ADR 0016）。 */
 const SEARCH_SIZE = 8;
@@ -79,7 +88,7 @@ function placeholders(count: number): string {
 }
 
 /**
- * 次のダイジェストに出す7件を選ぶ。
+ * 次のダイジェストの候補を選ぶ。出す7件ではなく、少し多めの候補を返す（ADR 0018）。
  *
  * `last_shown_at ASC`はSQLiteがNULLを先頭へ置くため、未提示が最優先になる。
  * その中を`clipped_at DESC`にすることで、昨日保存した記事が在庫の後ろで
@@ -93,7 +102,7 @@ export async function selectDigestClips(env: Env): Promise<DigestClip[]> {
       ORDER BY last_shown_at ASC, clipped_at DESC
       LIMIT ?`,
   )
-    .bind(DIGEST_SIZE)
+    .bind(DIGEST_CANDIDATES)
     .all<DigestClip>();
   return results;
 }

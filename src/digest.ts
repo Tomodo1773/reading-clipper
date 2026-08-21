@@ -1,7 +1,16 @@
 import type { ModelMessage } from 'ai';
 import { type AnyMessageBlock, type SectionBlock, SlackAPIClient } from 'slack-edge';
-import { clipTitle, type DigestClip, markDigestShown, selectDigestClips } from './clips';
+import {
+  clipTitle,
+  deleteClip,
+  DIGEST_SIZE,
+  type DigestClip,
+  markDigestShown,
+  selectDigestClips,
+} from './clips';
 import { clipBlockId, dismissActionBlock } from './dismiss';
+import { asClipError } from './errors';
+import { getGitHubFile } from './github';
 import type { Env } from './types';
 import { fetchWithTimeout } from './utils';
 
@@ -114,6 +123,49 @@ export function digestText(count: number): string {
 }
 
 /**
+ * GitHubに正本が残っているクリップだけを残す（ADR 0018）。消えていた行は台帳から落とす。
+ *
+ * ADR 0016でSlackから消せるようになったが、GitHub上で直接消す経路は残る。そちらで消しても
+ * 台帳には行が残り、ダイジェストのリンク先は記事のcanonical URLなので、出してしまうと
+ * 利用者からは生きているクリップと見分けが付かない。
+ *
+ * 台帳全体をGitHubと突き合わせないのは、孤児行が害をなすのが出た瞬間だけだからである。
+ *
+ * 削除は`markDigestShown`と違って投稿の成否を待たない。提示済みの印は「出せたか」の記録なので
+ * 投稿できてから打つが、こちらはGitHubの状態をそのまま写しているだけで、投稿とは関係が無い。
+ */
+export async function keepExistingClips(env: Env, clips: DigestClip[]): Promise<DigestClip[]> {
+  const checked = await Promise.all(
+    clips.map(async (clip) => ({ clip, exists: await stillOnGitHub(env, clip.path) })),
+  );
+  // 消すのはADR 0016と同じ1行ずつの削除。ここで消える件数は多くて数件なので、
+  // まとめて消す専用のクエリを別に持たない。
+  await Promise.all(
+    checked.filter((entry) => !entry.exists).map((entry) => deleteClip(env, entry.clip.path)),
+  );
+  return checked.filter((entry) => entry.exists).map((entry) => entry.clip);
+}
+
+/**
+ * GitHubにファイルが残っているか。
+ *
+ * **falseを返すのは404を見たときだけにする。** 認証の失敗もタイムアウトも5xxも「不明」であって
+ * 「無い」ではない。確認できなかったことを削除の根拠にすると、GitHubが不調な週に台帳が削れる。
+ * 確認が落ちた週はゴーストが1回出るが、それは次の週に取り返せる。消した行は戻らない。
+ */
+async function stillOnGitHub(env: Env, path: string): Promise<boolean> {
+  try {
+    return (await getGitHubFile(env, path)) !== undefined;
+  } catch (error) {
+    const clipError = asClipError(error, 'github');
+    console.warn(
+      JSON.stringify({ stage: clipError.stage, message: clipError.message, path }),
+    );
+    return true;
+  }
+}
+
+/**
  * Slackへ渡せるサムネイルだけを残す（ADR 0011）。
  *
  * Slackは`image_url`をサーバー側で取得しにいき、取れなければ`invalid_blocks`で
@@ -166,8 +218,10 @@ function digestTurn(clips: DigestClip[]): ModelMessage[] {
 /** 日曜9時（JST）に1通投稿する。cronトリガーはUTC指定なので`0 0 * * SUN`。 */
 export async function runWeeklyDigest(env: Env, now = new Date()): Promise<void> {
   const slack = new SlackAPIClient(env.SLACK_BOT_TOKEN);
-  const clips = await selectDigestClips(env);
-  const shown = await withUsableThumbnails(clips);
+  // 候補は多めに取り、GitHubから消えたものを落としてから7件へ切る（ADR 0018）。
+  // サムネイルの検証は投稿する7件にだけ走らせる。
+  const candidates = await keepExistingClips(env, await selectDigestClips(env));
+  const shown = await withUsableThumbnails(candidates.slice(0, DIGEST_SIZE));
   // cronで動く`scheduled`にはSlackのイベントが無く、投稿先の`channel`が手元に無い。
   // 既に開いているDMなら同じIDが返るだけで、新しい会話は作られない（`im:write`が要る）。
   const opened = await slack.conversations.open({ users: env.SLACK_ALLOWED_USER_ID });
