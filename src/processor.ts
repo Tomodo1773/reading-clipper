@@ -62,8 +62,8 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
       thread_ts: job.slackThreadTs,
       // blocksを付けると本文はそちらが持つ。textは通知とblocksを読めないクライアント用に残す。
       text: reply,
-      // 保存が起きたターンの返信にだけボタンを添える（ADR 0015）。
-      ...(saved.length > 0 ? { blocks: clipReplyBlocks(reply, saved) } : {}),
+      // 標準MarkdownをSlackに変換させ、保存が起きたターンにだけボタンを添える（ADR 0015, 0019）。
+      blocks: clipReplyBlocks(reply, saved),
       unfurl_links: false,
       unfurl_media: false,
     });

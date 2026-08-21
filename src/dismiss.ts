@@ -14,11 +14,11 @@ export const DISMISS_ACTION_ID = 'dismiss_clip';
 /** 読んだかどうかを主張しない語にする（ADR 0010）。「既読」とは呼ばない。 */
 export const DISMISS_LABEL = '片付ける';
 
-/** sectionのテキスト上限。超えるとメッセージ全体が`invalid_blocks`で拒否される。 */
-const MAX_SECTION_CHARS = 3000;
-
 /** buttonの`plain_text`の上限。 */
 const MAX_BUTTON_CHARS = 75;
+
+/** 1メッセージに含められるMarkdown blockのテキスト合計上限。 */
+const MAX_MARKDOWN_CHARS = 12_000;
 
 /**
  * クリップ1件ぶんのブロックに振る`block_id`の接頭辞。
@@ -99,23 +99,15 @@ export function keepAliveClips(
 /**
  * 保存したクリップを片付けるボタン付きの返信を組む（ADR 0015）。
  *
- * 本文はモデルが書いたSlackのmrkdwn（`<url|ラベル>`を含む）なので、エスケープはしない。
- * 保存直後の返信は短いが、質問を兼ねたメッセージへの返信は長くなりうるので、上限で割る。
- * サロゲートペアの途中で切らないよう、コードユニットではなく文字で割る。
+ * 本文はモデルが書いた標準Markdownを、そのままSlackに変換させる（ADR 0019）。
+ * Markdown blockはメッセージ内の合計が12,000文字まで。モデルへの指示だけに頼らず、
+ * このSlack境界でも省略して`invalid_blocks`による決定的な再試行を防ぐ。
  *
  * 1件のときはどれのボタンかが自明なので、ラベルに題名を入れない。
  */
 export function clipReplyBlocks(reply: string, clips: SavedClip[]): AnyMessageBlock[] {
-  const characters = [...reply];
-  const sections: AnyMessageBlock[] = [];
-  for (let at = 0; at < characters.length; at += MAX_SECTION_CHARS) {
-    sections.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: characters.slice(at, at + MAX_SECTION_CHARS).join('') },
-    });
-  }
   return [
-    ...sections,
+    { type: 'markdown', text: truncate(reply, MAX_MARKDOWN_CHARS) },
     ...clips.map((clip, index) =>
       dismissActionBlock(
         index,
