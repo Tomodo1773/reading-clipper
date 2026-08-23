@@ -21,7 +21,6 @@ import {
   getGitHubTextFile,
   putGitHubFile,
   searchGitHubCode,
-  type GitHubCodeMatch,
 } from './github';
 import { isGeneratedClipIndex } from './clip-index-format';
 import { renderClipMarkdown } from './markdown';
@@ -53,15 +52,11 @@ function toolFailure(
   return clipError.stage;
 }
 
-const SEARCH_SIZE = 8;
-const SEARCH_CANDIDATES = SEARCH_SIZE * 2;
-const VERIFY_CONCURRENCY = 5;
 const MAX_READ_CHARS = 60_000;
 
 interface SearchClip extends ClipRow {
-  dismissedAt?: string | null;
-  recordedInD1: boolean;
-  matchedIn: 'title' | 'body';
+  dismissed: boolean | null;
+  githubUrl: string;
   snippet?: string;
 }
 
@@ -70,50 +65,27 @@ function searchSnippet(value: string | undefined): string | undefined {
   return text ? text.slice(0, 240) : undefined;
 }
 
-/** GitHubを母集団として検索し、実在する結果にだけD1の注釈を足す（ADR 0020）。 */
+/** GitHubを母集団として候補を探し、D1の注釈があれば足す（ADR 0020）。 */
 async function findSavedClips(env: Env, query: string): Promise<SearchClip[]> {
-  const matches = await searchGitHubCode(env, query, SEARCH_CANDIDATES);
-  const verified: Array<{ match: GitHubCodeMatch; content: string }> = [];
-  for (let offset = 0; offset < matches.length && verified.length < SEARCH_SIZE; offset += VERIFY_CONCURRENCY) {
-    const batch = await Promise.all(
-      matches.slice(offset, offset + VERIFY_CONCURRENCY).map(async (match) => ({
-        match,
-        file: await getGitHubTextFile(env, match.path),
-      })),
-    );
-    for (const { match, file } of batch) {
-      // Code Searchの索引が削除へ追いついていない結果は、利用者へ返さない。
-      if (!file || isGeneratedClipIndex(file.path, file.content)) continue;
-      verified.push({ match, content: file.content });
-      if (verified.length === SEARCH_SIZE) break;
-    }
-  }
+  const matches = await searchGitHubCode(env, query);
 
   let annotations = new Map<string, FoundClip>();
   try {
-    annotations = await selectClipsByPath(env, verified.map(({ match }) => match.path));
+    annotations = await selectClipsByPath(env, matches.map((match) => match.path));
   } catch (error) {
     // D1は注釈レイヤー。落ちてもGitHubで見つけたクリップ自体は返す。
     toolFailure(error, 'clips', 'find_clips_annotations');
   }
 
-  const normalizedQuery = query.toLocaleLowerCase();
-  return verified.map(({ match, content }) => {
-    const { fields } = parseClipFrontMatter(content);
+  return matches.map((match) => {
     const annotation = annotations.get(match.path);
-    const title = fields.title ?? annotation?.title ?? null;
-    const url = fields.source_url ?? annotation?.url ?? null;
-    const titleHit = [title, url, match.path]
-      .filter((value): value is string => Boolean(value))
-      .some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
     return {
       path: match.path,
-      title,
-      url,
-      clippedAt: fields.clipped_at ?? annotation?.clippedAt ?? '',
-      dismissedAt: annotation?.dismissedAt,
-      recordedInD1: annotation !== undefined,
-      matchedIn: titleHit ? 'title' : match.matchedIn,
+      title: annotation?.title ?? null,
+      url: annotation?.url ?? null,
+      clippedAt: annotation?.clippedAt ?? '',
+      dismissed: annotation ? annotation.dismissedAt !== null : null,
+      githubUrl: match.htmlUrl,
       snippet: searchSnippet(match.snippet),
     };
   });
@@ -308,10 +280,10 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
       description: [
         '保存済みのクリップを、題名・URL・本文に含まれる語で探す。',
         'どのクリップのことかを特定するために使う。会話にまだ出ていないクリップは、これで探さないと分からない。',
-        '本文も探すので、題名に出てこない話題でも見つかる。matched_inがbodyなら本文で一致したということ。',
-        'snippetは対象を見分ける手掛かりで、記事の内容を答える根拠にはしない。内容はread_clipで読むこと。',
-        '結果のrefはdelete_clipへ渡すための番号で、いま返したものだけが有効。次のやり取りでは使えない。',
-        'dismissedが無い結果はD1に注釈が無い。GitHubには実在するので、無いものとして扱わない。',
+        '本文も探すので、題名に出てこない話題でも見つかる。結果は最大5件の候補。',
+        'snippetは候補を見分ける手掛かりで、記事の内容を答える根拠にはしない。内容はread_clipで読むこと。',
+        '結果のrefはread_clipまたはdelete_clipへ渡す番号で、いま返したものだけが有効。次のやり取りでは使えない。',
+        'dismissedがnullならD1に注釈が無い。GitHubの検索候補から落とさない。',
         '見つからなければfoundが空になる。そのときは対象が無いということ。',
       ].join(''),
       inputSchema: z.object({
@@ -329,11 +301,11 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
                 ref,
                 title: clipTitle(clip),
                 url: clip.url ?? undefined,
+                github_url: clip.githubUrl,
                 // set_clip_dismissedはパスで引くので、同じ検索から片付けへも繋げられるようにする。
                 path: clip.path,
                 clipped_at: clip.clippedAt || undefined,
-                dismissed: clip.recordedInD1 ? clip.dismissedAt !== null : undefined,
-                matched_in: clip.matchedIn,
+                dismissed: clip.dismissed,
                 snippet: clip.snippet,
               };
             }),
@@ -345,31 +317,40 @@ export function createTools(env: Env, receivedAt: string, google: GoogleGenerati
     }),
     read_clip: tool({
       description: [
-        '保存済みクリップの現在の本文をGitHubから読む。',
+        'find_clipsが返した候補1件の現在の本文をGitHubから読む。',
         '前に保存した記事の内容を聞かれたら、find_clipsで探してからこれで読むこと。',
-        'pathはfind_clipsの結果をそのまま渡す。foundがfalseなら読めたことにしない。',
+        'refはfind_clipsの結果をそのまま渡す。missingなら検索索引が古いので次の候補を試す。',
+        'unknown_refならその番号は今のやり取りに無いので、find_clipsから探し直す。',
         'completeがfalseなら長すぎるため末尾を省略している。',
       ].join(''),
       inputSchema: z.object({
-        path: z.string().regex(/^clips\//u).describe('find_clipsが返したクリップのパス。'),
+        ref: z.number().int().describe('find_clipsが返したref。1回につき1件。'),
       }),
-      execute: async ({ path }) => {
+      execute: async ({ ref }) => {
+        const clip = foundClips.get(ref);
+        if (!clip) return { found: false, unknown_ref: ref };
         try {
-          const file = await getGitHubTextFile(env, path);
-          if (!file || isGeneratedClipIndex(path, file.content)) return { found: false, unknown_path: path };
+          const file = await getGitHubTextFile(env, clip.path);
+          if (!file || isGeneratedClipIndex(clip.path, file.content)) {
+            return { found: false, missing: true, ref };
+          }
           const { fields, body } = parseClipFrontMatter(file.content);
           const text = body.trim();
           const complete = text.length <= MAX_READ_CHARS;
           return {
             found: true,
-            path,
+            ref,
+            path: clip.path,
             title: fields.title,
             url: fields.source_url,
             complete,
             body: complete ? text : text.slice(0, MAX_READ_CHARS),
           };
         } catch (error) {
-          return { found: false, failed_at: toolFailure(error, 'github', 'read_clip', { path }) };
+          return {
+            found: false,
+            failed_at: toolFailure(error, 'github', 'read_clip', { path: clip.path }),
+          };
         }
       },
     }),
