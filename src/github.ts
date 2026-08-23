@@ -33,6 +33,13 @@ export interface GitHubTextFile extends GitHubFile {
   content: string;
 }
 
+/** GitHub Code Searchが返した、保存済みクリップの候補（ADR 0020）。 */
+export interface GitHubCodeMatch extends GitHubFile {
+  matchedIn: 'title' | 'body';
+  /** GitHubが返した一致箇所。記事の内容を答える根拠には使わない。 */
+  snippet?: string;
+}
+
 export interface PutGitHubFileOptions {
   sha?: string;
   message?: string;
@@ -149,6 +156,82 @@ function contentsUrl(repo: string, path: string): string {
   const [owner, name] = repoParts(repo);
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
   return `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${encodedPath}`;
+}
+
+/**
+ * 保存先リポジトリの`clips/`だけをGitHub Code Searchで探す（ADR 0020）。
+ *
+ * 検索語はGitHubの構文として渡るが、結果を保存先repoと`clips/*.md`へもう一度絞る。
+ * モデルが`repo:`などを混ぜても、別リポジトリの結果はツールの外へ出ない。
+ */
+export async function searchGitHubCode(
+  env: Env,
+  query: string,
+  limit: number,
+): Promise<GitHubCodeMatch[]> {
+  const term = query.trim();
+  if (!term) return [];
+  const token = await getInstallationToken(env);
+  const endpoint = new URL('https://api.github.com/search/code');
+  endpoint.searchParams.set(
+    'q',
+    `${term} in:file,path repo:${env.GITHUB_REPO} path:clips/ extension:md`,
+  );
+  endpoint.searchParams.set('per_page', String(Math.min(Math.max(limit, 1), 100)));
+  const response = await fetchWithTimeout(
+    endpoint,
+    {
+      headers: {
+        ...githubHeaders(token),
+        accept: 'application/vnd.github.text-match+json',
+      },
+    },
+    20_000,
+    'github',
+  );
+  assertOk(response, 'github');
+  const payload = asRecord(await response.json());
+  if (!payload || !Array.isArray(payload.items)) {
+    throw new ClipError('GitHub code search response was invalid', 'github', true);
+  }
+  if (payload.incomplete_results === true) {
+    throw new ClipError('GitHub code search returned incomplete results', 'github', true);
+  }
+
+  const expectedRepo = env.GITHUB_REPO.toLowerCase();
+  const matches: GitHubCodeMatch[] = [];
+  for (const value of payload.items) {
+    const item = asRecord(value);
+    const repository = asRecord(item?.repository);
+    const path = stringField(item, 'path');
+    const sha = stringField(item, 'sha');
+    const htmlUrl = stringField(item, 'html_url');
+    if (
+      stringField(repository, 'full_name')?.toLowerCase() !== expectedRepo ||
+      !path?.startsWith('clips/') ||
+      !path.toLowerCase().endsWith('.md') ||
+      !sha ||
+      !htmlUrl
+    ) {
+      continue;
+    }
+
+    const textMatches = Array.isArray(item?.text_matches) ? item.text_matches : [];
+    const contentMatch = textMatches
+      .map(asRecord)
+      .find((match) => stringField(match, 'property') === 'content');
+    const pathMatch = textMatches
+      .map(asRecord)
+      .find((match) => stringField(match, 'property') === 'path');
+    matches.push({
+      path,
+      sha,
+      htmlUrl,
+      matchedIn: pathMatch ? 'title' : 'body',
+      snippet: stringField(contentMatch ?? pathMatch, 'fragment'),
+    });
+  }
+  return matches;
 }
 
 async function getGitHubFilePayload(

@@ -5,7 +5,7 @@ import { runChatTurn } from '../src/chat';
 import { recordClip } from '../src/clips';
 import { ClipError } from '../src/errors';
 import { resetGitHubTokenCache } from '../src/github';
-import { base64ToUtf8 } from '../src/utils';
+import { base64ToUtf8, utf8ToBase64 } from '../src/utils';
 import {
   generatePrivateKeyPem,
   htmlResponse,
@@ -142,6 +142,7 @@ function toolCallReply(name: string, args: Record<string, unknown>): Response {
 const loadCallReply = (url: string): Response => toolCallReply('load_content', { url });
 const saveCallReply = (url: string): Response => toolCallReply('save_loaded', { url });
 const findCallReply = (query: string): Response => toolCallReply('find_clips', { query });
+const readCallReply = (path: string): Response => toolCallReply('read_clip', { path });
 const deleteCallReply = (ref: number): Response => toolCallReply('delete_clip', { ref });
 
 /** Geminiがサーバー側で検索を実行したときの応答。1回のgenerateContentに全部入る。 */
@@ -613,6 +614,113 @@ describe('chat turn', () => {
   });
 });
 
+describe('reading a saved clip', () => {
+  it('finds GitHub-only content, verifies it exists, and reads the current body', async () => {
+    const path = 'clips/知識グラフ.md';
+    const markdown = [
+      '---',
+      'source_url: "https://example.com/knowledge-graph"',
+      'title: "知識グラフ"',
+      'clipped_at: "2026-08-20T00:00:00.000Z"',
+      '---',
+      '',
+      'オントロジーを使って概念間の関係を表現する。',
+    ].join('\n');
+    mockWorld(
+      [
+        findCallReply('オントロジー'),
+        readCallReply(path),
+        modelResponse([{ text: '保存していた記事では、概念間の関係をオントロジーで表現しているわ。' }]),
+      ],
+      (url, method) => {
+        if (url.includes('/search/code?') && method === 'GET') {
+          return jsonResponse({
+            total_count: 1,
+            incomplete_results: false,
+            items: [
+              {
+                path,
+                sha: 'clip-sha',
+                html_url: 'https://github.com/example/clips/blob/main/knowledge.md',
+                repository: { full_name: 'example/clips' },
+                text_matches: [{ property: 'content', fragment: '前後 オントロジー 前後' }],
+              },
+            ],
+          });
+        }
+        if (url.includes('/repos/example/clips/contents/') && method === 'GET') {
+          return jsonResponse({
+            sha: 'clip-sha',
+            html_url: 'https://github.com/example/clips/blob/main/knowledge.md',
+            encoding: 'base64',
+            content: utf8ToBase64(markdown),
+          });
+        }
+        return undefined;
+      },
+    );
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: '前に保存したオントロジーの記事、何が書いてあった？',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(toolOutput(turn.appended, 'find_clips')).toEqual({
+      found: [
+        {
+          ref: 1,
+          title: '知識グラフ',
+          url: 'https://example.com/knowledge-graph',
+          path,
+          clipped_at: '2026-08-20T00:00:00.000Z',
+          matched_in: 'body',
+          snippet: '前後 オントロジー 前後',
+        },
+      ],
+    });
+    expect(toolOutput(turn.appended, 'read_clip')).toEqual({
+      found: true,
+      path,
+      title: '知識グラフ',
+      url: 'https://example.com/knowledge-graph',
+      complete: true,
+      body: 'オントロジーを使って概念間の関係を表現する。',
+    });
+  });
+
+  it('drops a stale Code Search hit when Contents API says it no longer exists', async () => {
+    mockWorld(
+      [findCallReply('消えた記事'), modelResponse([{ text: '保存済みのものには見つからなかったわ。' }])],
+      (url, method) =>
+        url.includes('/search/code?') && method === 'GET'
+          ? jsonResponse({
+              total_count: 1,
+              incomplete_results: false,
+              items: [
+                {
+                  path: 'clips/消えた記事.md',
+                  sha: 'stale-sha',
+                  html_url: 'https://github.com/example/clips/blob/main/gone.md',
+                  repository: { full_name: 'example/clips' },
+                },
+              ],
+            })
+          : undefined,
+    );
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: '消えた記事を探して',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(toolOutput(turn.appended, 'find_clips')).toEqual({ found: [] });
+  });
+});
+
 /**
  * 削除の経路（ADR 0016）。
  *
@@ -621,6 +729,32 @@ describe('chat turn', () => {
  */
 describe('deleting a clip', () => {
   const CLIP_PATH = 'clips/中身の無い記事.md';
+  const CLIP_MARKDOWN = [
+    '---',
+    'source_url: "https://example.com/broken"',
+    'title: "中身の無い記事"',
+    'clipped_at: "2026-08-14T00:00:00.000Z"',
+    '---',
+    '',
+    '概要しか無い。',
+  ].join('\n');
+
+  const searchFindsClip = (url: string, method: string): Response | undefined =>
+    url.includes('/search/code?') && method === 'GET'
+      ? jsonResponse({
+          total_count: 1,
+          incomplete_results: false,
+          items: [
+            {
+              path: CLIP_PATH,
+              sha: 'old-sha',
+              html_url: 'https://github.com/example/clips/blob/main/clip.md',
+              repository: { full_name: 'example/clips' },
+              text_matches: [{ property: 'path', fragment: CLIP_PATH }],
+            },
+          ],
+        })
+      : undefined;
 
   /** GitHubにファイルが在る世界。GETがshaを返し、DELETEはmockWorldの既定が受ける。 */
   const fileExists = (url: string, method: string): Response | undefined =>
@@ -630,8 +764,13 @@ describe('deleting a clip', () => {
       ? jsonResponse({
           sha: 'old-sha',
           html_url: 'https://github.com/example/clips/blob/main/clip.md',
+          encoding: 'base64',
+          content: utf8ToBase64(CLIP_MARKDOWN),
         })
       : undefined;
+
+  const searchableFileExists = (url: string, method: string): Response | undefined =>
+    searchFindsClip(url, method) ?? fileExists(url, method);
 
   async function seedClip(): Promise<void> {
     await recordClip(makeEnv(), {
@@ -650,7 +789,7 @@ describe('deleting a clip', () => {
     await seedClip();
     const recorded = mockWorld(
       [findCallReply('中身の無い'), deleteCallReply(1), modelResponse([{ text: '消しておいたわ。' }])],
-      fileExists,
+      searchableFileExists,
     );
 
     const turn = await runChatTurn({
@@ -670,6 +809,8 @@ describe('deleting a clip', () => {
           path: CLIP_PATH,
           clipped_at: '2026-08-14T00:00:00.000Z',
           dismissed: false,
+          matched_in: 'title',
+          snippet: CLIP_PATH,
         },
       ],
     });
@@ -704,12 +845,19 @@ describe('deleting a clip', () => {
 
   it('still clears the ledger row when the file is already gone from GitHub', async () => {
     await seedClip();
-    // mockWorldの既定のGETは404。保存に失敗していたクリップの行がこれにあたる。
+    // 検索で実在を確認した直後に消された競合。delete側のGETだけ404になる。
+    let contentGets = 0;
     const recorded = mockWorld([
       findCallReply('中身の無い'),
       deleteCallReply(1),
       modelResponse([{ text: 'ファイルはもう無かったわ。記録は消しておいた。' }]),
-    ]);
+    ], (url, method) => {
+      const searched = searchFindsClip(url, method);
+      if (searched) return searched;
+      if (!url.includes('/repos/example/clips/contents/') || method !== 'GET') return undefined;
+      contentGets += 1;
+      return contentGets === 1 ? fileExists(url, method) : jsonResponse({ message: 'Not Found' }, 404);
+    });
 
     const turn = await runChatTurn({
       env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
@@ -736,6 +884,8 @@ describe('deleting a clip', () => {
         modelResponse([{ text: '消せなかったわ。時間を置いて言ってちょうだい。' }]),
       ],
       (url, method) => {
+        const searched = searchFindsClip(url, method);
+        if (searched) return searched;
         if (!url.includes('/repos/example/clips/contents/')) return undefined;
         if (method === 'GET') return fileExists(url, method);
         return method === 'DELETE' ? jsonResponse({ message: 'boom' }, 500) : undefined;
