@@ -12,9 +12,6 @@ export const DIGEST_SIZE = 7;
  */
 const DIGEST_CANDIDATES = DIGEST_SIZE + 3;
 
-/** 1回の検索で返す件数の上限。結果はモデルの文脈に入るので、全件は返さない（ADR 0016）。 */
-const SEARCH_SIZE = 8;
-
 /** GitHubのclips/直下で見せる新着件数。保存総数には連動させない（ADR 0017）。 */
 const RECENT_CLIP_SIZE = 20;
 
@@ -165,36 +162,24 @@ export async function setClipDismissed(
 }
 
 /**
- * LIKEのメタ文字を打ち消す。素通しにすると`%`1文字で全件一致になる。
- * エスケープ文字自身も対象に含める。含めないと、語に混じった`\`が後続の1文字を無効にする。
- */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
-}
-
-/**
- * 題名・URL・パスの部分一致でクリップを探す（ADR 0016）。
+ * GitHub Code Searchが返したパスへ、D1の注釈を付ける（ADR 0020）。
  *
- * 片付け済みも返す。ダイジェストの母集団と違い、片付けたつもりのゴミを
- * 後から消したくなる場面があるため、`dismissed_at`では絞らない。
- *
- * `title`がNULLの行（バックフィル由来）があるので、パスも一致の対象にする。
- * 全文検索の索引は持たない。個人利用の規模では部分一致1本で足りる。
+ * 母集団と検索はGitHubが担う。D1に行が無いクリップも検索結果から落とさないため、
+ * 返り値はMapにして「注釈なし」と「片付けていない」を呼び出し側が区別できるようにする。
  */
-export async function findClips(env: Env, query: string): Promise<FoundClip[]> {
-  const pattern = `%${escapeLike(query)}%`;
+export async function selectClipsByPath(
+  env: Env,
+  paths: string[],
+): Promise<Map<string, FoundClip>> {
+  if (paths.length === 0) return new Map();
   const { results } = await env.CLIPS.prepare(
     `SELECT path, title, url, clipped_at AS clippedAt, dismissed_at AS dismissedAt
        FROM clips
-      WHERE title LIKE ? ESCAPE '\\'
-         OR url LIKE ? ESCAPE '\\'
-         OR path LIKE ? ESCAPE '\\'
-      ORDER BY clipped_at DESC
-      LIMIT ?`,
+      WHERE path IN (${placeholders(paths.length)})`,
   )
-    .bind(pattern, pattern, pattern, SEARCH_SIZE)
+    .bind(...paths)
     .all<FoundClip>();
-  return results;
+  return new Map(results.map((clip) => [clip.path, clip]));
 }
 
 /**

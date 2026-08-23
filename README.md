@@ -30,6 +30,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存。
 - **最近保存したクリップをGitHubで一覧**
   保存先の`clips/README.md`へ最新20件を新しい順で自動表示。記事のファイル名は日付で長くせず、タイトルのまま保つ。
+- **保存済みクリップを本文から探して読み返す**
+  Slackで覚えている語を伝えると、GitHub上の題名・パス・本文からクリップを探し、現在保存されているMarkdownを読んで質問へ答える。D1に記録が無いクリップも検索でき、削除済みの古い検索結果は実在確認で落とす。
 - **その場で、または週次ダイジェストで片付け**
   保存した直後の返信にボタンが付き、読まないと決めた記事をその場で片付けられる。まだ片付けていないクリップは毎週日曜9時（JST）に最大7件Slackへ再掲され、こちらもボタンまたはスレッド内の自然文で片付けられる。GitHub上でMarkdownを直接消したクリップは、投稿の直前に実在を確かめて落とすため、ダイジェストには出てこない。
 - **壊れた保存はチャットから削除**
@@ -154,3 +156,4 @@ pnpm wrangler deploy --dry-run
 - [クリップの削除を検索とターン内の参照番号で組む](docs/adr/0016-delete-clip-via-search-and-turn-scoped-ref.md)
 - [フラットな保存構造と新着順の表示を分離する](docs/adr/0017-generated-recent-clip-index.md)
 - [GitHubから消えたクリップは出す直前の実在確認で落とす](docs/adr/0018-verify-clip-exists-before-digest.md)
+- [保存済みクリップはGitHubで検索し、現在の本文を読み直す](docs/adr/0020-search-and-read-saved-clips-via-github.md)

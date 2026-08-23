@@ -20,6 +20,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { isGeneratedClipIndex } from '../src/clip-index-format.ts';
 import { clipExcerpt } from '../src/excerpt.ts';
+import { parseClipFrontMatter } from '../src/front-matter.ts';
 import { findOgImage } from '../src/html.ts';
 
 /** og:imageの取得を同時に何本走らせるか。相手のサイトを叩きすぎない範囲にする。 */
@@ -48,28 +49,6 @@ function sqlLiteral(value: string | undefined): string {
  * 最初のブロックで打ち切らないと本文側のtitleを拾ってしまう。
  * 旧世代のキー（`slack_event_id` / `summary_status`）は黙って無視する。
  */
-function splitFrontMatter(source: string): { fields: Record<string, string>; body: string } {
-  const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match?.[1]) return { fields: {}, body: source };
-  const fields: Record<string, string> = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const field = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (!field?.[1]) continue;
-    const raw = (field[2] ?? '').trim();
-    // 値は`renderClipMarkdown`が`JSON.stringify`で書いている。boolは素のまま。
-    if (raw.startsWith('"')) {
-      try {
-        fields[field[1]] = String(JSON.parse(raw));
-        continue;
-      } catch {
-        // 壊れた行は素の値として扱う。
-      }
-    }
-    fields[field[1]] = raw;
-  }
-  return { fields, body: source.slice(match[0].length) };
-}
-
 async function markdownFiles(root: string): Promise<string[]> {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
   return entries
@@ -132,7 +111,7 @@ for (const file of files) {
   const source = await readFile(file, 'utf8');
   const path = `clips/${relative(clipsDir, file).split(sep).join('/')}`;
   if (isGeneratedClipIndex(path, source)) continue;
-  const { fields, body } = splitFrontMatter(source);
+  const { fields, body } = parseClipFrontMatter(source);
   clips.push({
     // D1のキーはリポジトリ内のパス。Windowsの`\`はここで`/`へ寄せる。
     path,

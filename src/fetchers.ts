@@ -1,4 +1,5 @@
 import { ClipError, isRetryableStatus } from './errors';
+import { splitFrontMatter } from './front-matter';
 import { decodeEntities, findOgImage, parseAttributes } from './html';
 import type { Env, FetchedContent } from './types';
 import { canonicalizeUrl, classifyUrl, extractXPostId, extractZennArticleSlug } from './url';
@@ -40,26 +41,12 @@ function finalize(content: FetchedBody): FetchedBody {
  * Qiitaの`.md`は本文の前にYAMLフロントマターを置く。記事タイトルはそこにしか無く、
  * 本文は見出しから始まるため、本文の最初の見出しをタイトルとして扱ってはいけない。
  */
-function splitQiitaFrontMatter(markdown: string): {
-  fields: Record<string, string>;
-  body: string;
-} {
-  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match?.[1]) return { fields: {}, body: markdown };
-  const fields: Record<string, string> = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const field = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (field?.[1]) fields[field[1]] = (field[2] ?? '').trim();
-  }
-  return { fields, body: markdown.slice(match[0].length) };
-}
-
 async function fetchQiita(url: URL): Promise<FetchedBody> {
   const markdownUrl = new URL(url);
   if (!markdownUrl.pathname.endsWith('.md')) markdownUrl.pathname += '.md';
   const response = await fetchWithTimeout(markdownUrl, { headers: { accept: 'text/markdown' } }, 15_000, 'fetch');
   assertOk(response, 'fetch');
-  const { fields, body } = splitQiitaFrontMatter(await response.text());
+  const { fields, body } = splitFrontMatter(await response.text());
   return finalize({
     source: 'qiita',
     title: fields.title || (url.pathname.split('/').at(-1) ?? 'Qiita article'),
