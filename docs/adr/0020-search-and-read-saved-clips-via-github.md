@@ -15,10 +15,12 @@ D1へ本文を複製して検索する案を検討したが、GitHubとD1の母�
 
 全文検索をD1へ置くなら、GitHubからD1への継続的な突き合わせも検索機能の一部になる。検索のためだけに正本の母集団を複製し、同期経路まで持つ形である。
 
-一方、GitHub REST APIの`GET /search/code`はGitHub App installation access tokenに対応している。実際の保存先リポジトリでも、private repository内の日本語本文と途中部分が検索でき、text-match metadataから一致箇所を取得できることを確認した。
+一方、GitHub REST APIの`GET /search/code`はGitHub App installation access tokenに対応している。実際の保存先リポジトリでは、private repository内の日本語本文と途中部分が検索でき、text-match metadataから一致箇所を取得できることを確認した。さらにGitHub Actionsの`GITHUB_TOKEN`がinstallation tokenであることを同じリクエスト内で確認し、そのトークンでAPI version `2022-11-28`のCode Searchが成功するスモークテストも行った。
 
 - [Search code](https://docs.github.com/en/rest/search/search#search-code)
 - [Endpoints available for GitHub App installation access tokens](https://docs.github.com/en/rest/authentication/endpoints-available-for-github-app-installation-access-tokens)
+- [GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token)
+- [Installation-token smoke run](https://github.com/Tomodo1773/reading-clipper/actions/runs/32628757264)
 
 ## 決定
 
