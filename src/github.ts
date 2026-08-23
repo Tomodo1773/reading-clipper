@@ -1,4 +1,5 @@
 import { ClipError, isRetryableStatus } from './errors';
+import { CLIP_INDEX_PATH } from './clip-index-format';
 import type { Env } from './types';
 import {
   asRecord,
@@ -13,6 +14,7 @@ import {
 } from './utils';
 
 const GITHUB_API_VERSION = '2022-11-28';
+const CODE_SEARCH_SIZE = 5;
 
 interface CachedToken {
   cacheKey: string;
@@ -35,7 +37,6 @@ export interface GitHubTextFile extends GitHubFile {
 
 /** GitHub Code Searchが返した、保存済みクリップの候補（ADR 0020）。 */
 export interface GitHubCodeMatch extends GitHubFile {
-  matchedIn: 'title' | 'body';
   /** GitHubが返した一致箇所。記事の内容を答える根拠には使わない。 */
   snippet?: string;
 }
@@ -164,11 +165,7 @@ function contentsUrl(repo: string, path: string): string {
  * 検索語はGitHubの構文として渡るが、結果を保存先repoと`clips/*.md`へもう一度絞る。
  * モデルが`repo:`などを混ぜても、別リポジトリの結果はツールの外へ出ない。
  */
-export async function searchGitHubCode(
-  env: Env,
-  query: string,
-  limit: number,
-): Promise<GitHubCodeMatch[]> {
+export async function searchGitHubCode(env: Env, query: string): Promise<GitHubCodeMatch[]> {
   const term = query.trim();
   if (!term) return [];
   const token = await getInstallationToken(env);
@@ -177,7 +174,8 @@ export async function searchGitHubCode(
     'q',
     `${term} in:file,path repo:${env.GITHUB_REPO} path:clips/ extension:md`,
   );
-  endpoint.searchParams.set('per_page', String(Math.min(Math.max(limit, 1), 100)));
+  // 候補を見比べるには5件で足りる。続きが要るときは語を絞って探し直す（ADR 0020）。
+  endpoint.searchParams.set('per_page', String(CODE_SEARCH_SIZE));
   const response = await fetchWithTimeout(
     endpoint,
     {
@@ -210,6 +208,7 @@ export async function searchGitHubCode(
       stringField(repository, 'full_name')?.toLowerCase() !== expectedRepo ||
       !path?.startsWith('clips/') ||
       !path.toLowerCase().endsWith('.md') ||
+      path === CLIP_INDEX_PATH ||
       !sha ||
       !htmlUrl
     ) {
@@ -227,9 +226,9 @@ export async function searchGitHubCode(
       path,
       sha,
       htmlUrl,
-      matchedIn: pathMatch ? 'title' : 'body',
       snippet: stringField(contentMatch ?? pathMatch, 'fragment'),
     });
+    if (matches.length === CODE_SEARCH_SIZE) break;
   }
   return matches;
 }

@@ -142,7 +142,7 @@ function toolCallReply(name: string, args: Record<string, unknown>): Response {
 const loadCallReply = (url: string): Response => toolCallReply('load_content', { url });
 const saveCallReply = (url: string): Response => toolCallReply('save_loaded', { url });
 const findCallReply = (query: string): Response => toolCallReply('find_clips', { query });
-const readCallReply = (path: string): Response => toolCallReply('read_clip', { path });
+const readCallReply = (ref: number): Response => toolCallReply('read_clip', { ref });
 const deleteCallReply = (ref: number): Response => toolCallReply('delete_clip', { ref });
 
 /** Geminiがサーバー側で検索を実行したときの応答。1回のgenerateContentに全部入る。 */
@@ -615,8 +615,9 @@ describe('chat turn', () => {
 });
 
 describe('reading a saved clip', () => {
-  it('finds GitHub-only content, verifies it exists, and reads the current body', async () => {
+  it('finds a GitHub-only candidate and reads only the selected body', async () => {
     const path = 'clips/知識グラフ.md';
+    let contentGets = 0;
     const markdown = [
       '---',
       'source_url: "https://example.com/knowledge-graph"',
@@ -629,7 +630,7 @@ describe('reading a saved clip', () => {
     mockWorld(
       [
         findCallReply('オントロジー'),
-        readCallReply(path),
+        readCallReply(1),
         modelResponse([{ text: '保存していた記事では、概念間の関係をオントロジーで表現しているわ。' }]),
       ],
       (url, method) => {
@@ -649,6 +650,7 @@ describe('reading a saved clip', () => {
           });
         }
         if (url.includes('/repos/example/clips/contents/') && method === 'GET') {
+          contentGets += 1;
           return jsonResponse({
             sha: 'clip-sha',
             html_url: 'https://github.com/example/clips/blob/main/knowledge.md',
@@ -672,27 +674,48 @@ describe('reading a saved clip', () => {
         {
           ref: 1,
           title: '知識グラフ',
-          url: 'https://example.com/knowledge-graph',
+          github_url: 'https://github.com/example/clips/blob/main/knowledge.md',
           path,
-          clipped_at: '2026-08-20T00:00:00.000Z',
-          matched_in: 'body',
+          dismissed: null,
           snippet: '前後 オントロジー 前後',
         },
       ],
     });
     expect(toolOutput(turn.appended, 'read_clip')).toEqual({
       found: true,
+      ref: 1,
       path,
       title: '知識グラフ',
       url: 'https://example.com/knowledge-graph',
       complete: true,
       body: 'オントロジーを使って概念間の関係を表現する。',
     });
+    expect(contentGets).toBe(1);
   });
 
-  it('drops a stale Code Search hit when Contents API says it no longer exists', async () => {
+  it('refuses to read a ref that find_clips did not return', async () => {
+    mockWorld([
+      readCallReply(7),
+      modelResponse([{ text: 'その候補は今の検索結果に無いから、先に探し直すわ。' }]),
+    ]);
+
+    const turn = await runChatTurn({
+      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      history: [],
+      userText: '前の7番を読んで',
+      receivedAt: RECEIVED_AT,
+    });
+
+    expect(toolOutput(turn.appended, 'read_clip')).toEqual({ found: false, unknown_ref: 7 });
+  });
+
+  it('reports a stale Code Search candidate when the selected file no longer exists', async () => {
     mockWorld(
-      [findCallReply('消えた記事'), modelResponse([{ text: '保存済みのものには見つからなかったわ。' }])],
+      [
+        findCallReply('消えた記事'),
+        readCallReply(1),
+        modelResponse([{ text: '検索候補には出たけれど、現在のファイルはもう無かったわ。' }]),
+      ],
       (url, method) =>
         url.includes('/search/code?') && method === 'GET'
           ? jsonResponse({
@@ -717,7 +740,22 @@ describe('reading a saved clip', () => {
       receivedAt: RECEIVED_AT,
     });
 
-    expect(toolOutput(turn.appended, 'find_clips')).toEqual({ found: [] });
+    expect(toolOutput(turn.appended, 'find_clips')).toEqual({
+      found: [
+        {
+          ref: 1,
+          title: '消えた記事',
+          github_url: 'https://github.com/example/clips/blob/main/gone.md',
+          path: 'clips/消えた記事.md',
+          dismissed: null,
+        },
+      ],
+    });
+    expect(toolOutput(turn.appended, 'read_clip')).toEqual({
+      found: false,
+      missing: true,
+      ref: 1,
+    });
   });
 });
 
@@ -806,10 +844,10 @@ describe('deleting a clip', () => {
           ref: 1,
           title: '中身の無い記事',
           url: 'https://example.com/broken',
+          github_url: 'https://github.com/example/clips/blob/main/clip.md',
           path: CLIP_PATH,
           clipped_at: '2026-08-14T00:00:00.000Z',
           dismissed: false,
-          matched_in: 'title',
           snippet: CLIP_PATH,
         },
       ],
@@ -845,8 +883,7 @@ describe('deleting a clip', () => {
 
   it('still clears the ledger row when the file is already gone from GitHub', async () => {
     await seedClip();
-    // 検索で実在を確認した直後に消された競合。delete側のGETだけ404になる。
-    let contentGets = 0;
+    // Code Searchの索引だけに残っており、delete側のGETでは既に404になる。
     const recorded = mockWorld([
       findCallReply('中身の無い'),
       deleteCallReply(1),
@@ -855,8 +892,7 @@ describe('deleting a clip', () => {
       const searched = searchFindsClip(url, method);
       if (searched) return searched;
       if (!url.includes('/repos/example/clips/contents/') || method !== 'GET') return undefined;
-      contentGets += 1;
-      return contentGets === 1 ? fileExists(url, method) : jsonResponse({ message: 'Not Found' }, 404);
+      return jsonResponse({ message: 'Not Found' }, 404);
     });
 
     const turn = await runChatTurn({

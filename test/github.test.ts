@@ -90,27 +90,18 @@ describe('GitHub Code Search', () => {
     const matches = await searchGitHubCode(
       makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
       'オントロジー',
-      16,
     );
 
     expect(searched?.searchParams.get('q')).toBe(
       'オントロジー in:file,path repo:example/clips path:clips/ extension:md',
     );
-    expect(searched?.searchParams.get('per_page')).toBe('16');
+    expect(searched?.searchParams.get('per_page')).toBe('5');
     expect(matches).toEqual([
       {
         path: 'clips/設計.md',
         sha: 'sha-1',
         htmlUrl: 'https://github.com/example/clips/blob/main/clips/x.md',
-        matchedIn: 'body',
         snippet: '前後 オントロジー 前後',
-      },
-      {
-        path: 'clips/README.md',
-        sha: 'sha-2',
-        htmlUrl: 'https://github.com/example/clips/blob/main/clips/README.md',
-        matchedIn: 'title',
-        snippet: 'clips/README.md',
       },
     ]);
   });
@@ -125,7 +116,7 @@ describe('GitHub Code Search', () => {
     });
 
     await expect(
-      searchGitHubCode(makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), '設計', 8),
+      searchGitHubCode(makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), '設計'),
     ).rejects.toMatchObject({ message: 'GitHub code search returned incomplete results' });
   });
 });
