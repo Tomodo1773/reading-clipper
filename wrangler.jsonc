@@ -8,8 +8,7 @@
   // minimumReleaseAge により wrangler は7日以上前のものが入るため、上限は今日より前になる。
   "compatibility_date": "2026-08-01",
 
-  // 受付（HTTP）と処理（Queue consumer）を1つのWorkerに同居させる。
-  // 論理的な分離はハンドラー単位で行い、secretsとデプロイ経路を1系統に保つ。
+  // Bot/Core Worker。Slack受付、Queue consumer、cron、AIとtool実処理を持つ（ADR 0021）。
   "observability": {
     "enabled": true
   },
@@ -21,6 +20,10 @@
       {
         "name": "THREAD",
         "class_name": "ThreadAgent"
+      },
+      {
+        "name": "TOOL_STATE",
+        "class_name": "ToolState"
       }
     ]
   },
@@ -28,6 +31,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ThreadAgent"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ToolState"]
     }
   ],
 
@@ -76,6 +83,8 @@
   // account IDは CLOUDFLARE_ACCOUNT_ID、他は `wrangler secret put` で渡す。
   "vars": {
     "AI_GATEWAY_ID": "reading-clipper-summarizer",
+    // 通常BotとMCP Core RPCが共有する単一利用者の内部ID（ADR 0022）。
+    "TOOL_OWNER_ID": "primary",
     // モデルはsecretではない。AI Gateway未対応時もコード変更なしで差し替えられるようbindingにする。
     // ここはGemini 3世代であること。2.x以下にすると`@ai-sdk/google`がgoogle_searchと
     // save_clipの併用を認めず、save_clipのfunctionDeclarationsをwarningだけ出して落とす

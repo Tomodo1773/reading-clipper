@@ -3,6 +3,8 @@
 - ステータス: Accepted
 - 日付: 2026-08-17
 
+> 更新: `load_content`と`save_loaded`を分ける判断は維持する。一時保存をターン内Mapへ置く判断と`save_loaded(url)`の入力は[ADR 0022](0022-persist-tool-refs-in-durable-object.md)で変更し、owner単位のDurable Objectに置く`loaded_ref`を使う。
+
 ## 背景
 
 `save_clip` は渡されたURLをそのまま保存する。しかしSlackへ届くURLは、保存したい記事そのものを指しているとは限らない。実運用で2種類のずれが出た。

@@ -7,14 +7,17 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:mcp": "wrangler deploy -c wrangler.mcp.jsonc",
     "cf-typegen": "wrangler types",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p src/tsconfig.json && tsc --noEmit -p test/tsconfig.json",
+    "dry-run": "wrangler deploy --dry-run && wrangler deploy --dry-run -c wrangler.mcp.jsonc",
     "test": "vitest run",
     "setup:aigw": "node --experimental-strip-types scripts/setup-ai-gateway.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.44",
     "@ai-sdk/provider": "^4.0.7",
+    "@modelcontextprotocol/server": "2.0.0",
     "ai": "^7.0.65",
     "slack-edge": "^1.3.17",
     "zod": "^4.4.3"

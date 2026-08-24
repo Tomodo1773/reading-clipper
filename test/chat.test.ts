@@ -16,6 +16,9 @@ import {
 } from './helpers';
 
 const RECEIVED_AT = '2026-08-15T00:00:00.000Z';
+const LOADED_REF_1 = '00000000-0000-4000-8000-000000000001';
+const LOADED_REF_2 = '00000000-0000-4000-8000-000000000002';
+const CLIP_REF_1 = '00000000-0000-4000-8000-000000000001';
 const ARTICLE = '---\ntitle: Worker設計\nauthor: alice\n---\n## 概要\n\nQueueで重い処理を分離する。';
 
 let privateKeyPem: string;
@@ -24,6 +27,10 @@ beforeEach(async () => {
   resetGitHubTokenCache();
   await resetClips();
   privateKeyPem = await generatePrivateKeyPem();
+  let ref = 0;
+  vi.spyOn(crypto, 'randomUUID').mockImplementation(
+    () => `00000000-0000-4000-8000-${String(++ref).padStart(12, '0')}` as `${string}-${string}-${string}-${string}-${string}`,
+  );
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -140,10 +147,13 @@ function toolCallReply(name: string, args: Record<string, unknown>): Response {
 }
 
 const loadCallReply = (url: string): Response => toolCallReply('load_content', { url });
-const saveCallReply = (url: string): Response => toolCallReply('save_loaded', { url });
+const saveCallReply = (_url: string, loadedRef = LOADED_REF_1): Response =>
+  toolCallReply('save_loaded', { loaded_ref: loadedRef });
 const findCallReply = (query: string): Response => toolCallReply('find_clips', { query });
-const readCallReply = (ref: number): Response => toolCallReply('read_clip', { ref });
-const deleteCallReply = (ref: number): Response => toolCallReply('delete_clip', { ref });
+const readCallReply = (ref: number): Response =>
+  toolCallReply('read_clip', { clip_ref: ref === 1 ? CLIP_REF_1 : `unknown-${ref}` });
+const deleteCallReply = (ref: number): Response =>
+  toolCallReply('delete_clip', { clip_ref: ref === 1 ? CLIP_REF_1 : `unknown-${ref}` });
 
 /** Geminiがサーバー側で検索を実行したときの応答。1回のgenerateContentに全部入る。 */
 function groundedReply(text: string): Response {
@@ -206,6 +216,7 @@ describe('chat turn', () => {
     // 本文が会話に現れるのはロードの1回だけ。保存の結果には入れない（ADR 0012）。
     const load = toolOutput(turn.appended, 'load_content');
     expect(load.loaded).toBe(true);
+    expect(load.loaded_ref).toBe(LOADED_REF_1);
     expect(load.url).toBe('https://qiita.com/alice/items/abc');
     expect(String(load.body)).toContain('Queueで重い処理を分離する。');
 
@@ -241,6 +252,33 @@ describe('chat turn', () => {
     ]);
   });
 
+  it('saves the same snapshot from a loaded_ref in a later Slack turn', async () => {
+    const recorded = mockWorld([
+      loadCallReply('https://qiita.com/alice/items/abc'),
+      modelResponse([{ text: '中身は読んだわ。保存はまだしていない。' }]),
+      saveCallReply('ignored', LOADED_REF_1),
+      modelResponse([{ text: 'さっき読んだsnapshotを保存したわ。' }]),
+    ]);
+    const env = makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem });
+    const first = await runChatTurn({
+      env,
+      history: [],
+      userText: 'まず読んで',
+      receivedAt: RECEIVED_AT,
+    });
+    const second = await runChatTurn({
+      env,
+      history: first.appended,
+      userText: 'それを保存して',
+      receivedAt: '2026-08-16T00:00:00.000Z',
+    });
+
+    expect(toolOutput(first.appended, 'load_content').loaded_ref).toBe(LOADED_REF_1);
+    expect(toolOutput(second.appended, 'save_loaded')).toMatchObject({ saved: true });
+    expect(recorded.articleFetches).toBe(1);
+    expect(recorded.savedMarkdown).toContain('Queueで重い処理を分離する。');
+  });
+
   it('keeps the clip save successful when the generated index update fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const recorded = mockWorld(
@@ -270,9 +308,9 @@ describe('chat turn', () => {
 
   /**
    * 順序を実際に止めているのはここだけ。名前と説明文は働きかけでしかない（ADR 0012）。
-   * モデルが組み立てた実在しないURLも、読んでいない以上ここで止まる。
+   * モデルが組み立てた実在しないrefも、発行していない以上ここで止まる。
    */
-  it('refuses to save a URL that was not loaded in this turn', async () => {
+  it('refuses an unissued loaded_ref', async () => {
     const recorded = mockWorld([
       saveCallReply('https://qiita.com/alice/items/abc'),
       modelResponse([{ text: '先に中身を読んでくるわね。' }]),
@@ -287,7 +325,8 @@ describe('chat turn', () => {
 
     expect(toolOutput(turn.appended, 'save_loaded')).toEqual({
       saved: false,
-      not_loaded: 'https://qiita.com/alice/items/abc',
+      ref: LOADED_REF_1,
+      ref_error: 'unknown_ref',
     });
     // 保存できていないので、返信にボタンは付かない（ADR 0015）。
     expect(turn.saved).toEqual([]);
@@ -615,6 +654,74 @@ describe('chat turn', () => {
 });
 
 describe('reading a saved clip', () => {
+  it('reads a find_clips ref in a later Slack turn', async () => {
+    const path = 'clips/後で読む.md';
+    const markdown = [
+      '---',
+      'source_url: "https://example.com/later"',
+      'title: "後で読む"',
+      '---',
+      '',
+      '別のSlack turnでも同じopaque refを解決できる。',
+    ].join('\n');
+    mockWorld(
+      [
+        findCallReply('後で読む'),
+        modelResponse([{ text: '候補を見つけたわ。' }]),
+        readCallReply(1),
+        modelResponse([{ text: '別のターンでも読めたわ。' }]),
+      ],
+      (url, method) => {
+        if (url.includes('/search/code?') && method === 'GET') {
+          return jsonResponse({
+            total_count: 1,
+            incomplete_results: false,
+            items: [
+              {
+                path,
+                sha: 'later-sha',
+                html_url: 'https://github.com/example/clips/blob/main/later.md',
+                repository: { full_name: 'example/clips' },
+              },
+            ],
+          });
+        }
+        if (url.includes('/repos/example/clips/contents/') && method === 'GET') {
+          return jsonResponse({
+            sha: 'later-sha',
+            html_url: 'https://github.com/example/clips/blob/main/later.md',
+            encoding: 'base64',
+            content: utf8ToBase64(markdown),
+          });
+        }
+        return undefined;
+      },
+    );
+    const env = makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem });
+
+    const first = await runChatTurn({
+      env,
+      history: [],
+      userText: '後で読む記事を探して',
+      receivedAt: RECEIVED_AT,
+    });
+    const second = await runChatTurn({
+      env,
+      history: first.appended,
+      userText: 'その候補を読んで',
+      receivedAt: '2026-08-16T00:00:00.000Z',
+    });
+
+    expect(toolOutput(first.appended, 'find_clips')).toMatchObject({
+      found: [{ clip_ref: CLIP_REF_1 }],
+    });
+    expect(toolOutput(second.appended, 'read_clip')).toMatchObject({
+      found: true,
+      clip_ref: CLIP_REF_1,
+      body: '別のSlack turnでも同じopaque refを解決できる。',
+    });
+  });
+
   it('finds a GitHub-only candidate and reads only the selected body', async () => {
     const path = 'clips/知識グラフ.md';
     let contentGets = 0;
@@ -672,7 +779,7 @@ describe('reading a saved clip', () => {
     expect(toolOutput(turn.appended, 'find_clips')).toEqual({
       found: [
         {
-          ref: 1,
+          clip_ref: CLIP_REF_1,
           title: '知識グラフ',
           github_url: 'https://github.com/example/clips/blob/main/knowledge.md',
           path,
@@ -683,7 +790,7 @@ describe('reading a saved clip', () => {
     });
     expect(toolOutput(turn.appended, 'read_clip')).toEqual({
       found: true,
-      ref: 1,
+      clip_ref: CLIP_REF_1,
       path,
       title: '知識グラフ',
       url: 'https://example.com/knowledge-graph',
@@ -706,7 +813,11 @@ describe('reading a saved clip', () => {
       receivedAt: RECEIVED_AT,
     });
 
-    expect(toolOutput(turn.appended, 'read_clip')).toEqual({ found: false, unknown_ref: 7 });
+    expect(toolOutput(turn.appended, 'read_clip')).toEqual({
+      found: false,
+      ref: 'unknown-7',
+      ref_error: 'unknown_ref',
+    });
   });
 
   it('reports a stale Code Search candidate when the selected file no longer exists', async () => {
@@ -743,7 +854,7 @@ describe('reading a saved clip', () => {
     expect(toolOutput(turn.appended, 'find_clips')).toEqual({
       found: [
         {
-          ref: 1,
+          clip_ref: CLIP_REF_1,
           title: '消えた記事',
           github_url: 'https://github.com/example/clips/blob/main/gone.md',
           path: 'clips/消えた記事.md',
@@ -754,7 +865,7 @@ describe('reading a saved clip', () => {
     expect(toolOutput(turn.appended, 'read_clip')).toEqual({
       found: false,
       missing: true,
-      ref: 1,
+      clip_ref: CLIP_REF_1,
     });
   });
 });
@@ -837,11 +948,11 @@ describe('deleting a clip', () => {
       receivedAt: RECEIVED_AT,
     });
 
-    // 検索が返すのは、モデルが組み立てられないターン内限定の番号である。
+    // 検索が返すのは、モデルがpathから組み立てられないowner-boundなopaque refである。
     expect(toolOutput(turn.appended, 'find_clips')).toEqual({
       found: [
         {
-          ref: 1,
+          clip_ref: CLIP_REF_1,
           title: '中身の無い記事',
           url: 'https://example.com/broken',
           github_url: 'https://github.com/example/clips/blob/main/clip.md',
@@ -866,7 +977,7 @@ describe('deleting a clip', () => {
 
   it('refuses a ref it never handed out, without touching GitHub or the ledger', async () => {
     await seedClip();
-    // 探さずにいきなり消そうとする。説明文ではなくターン内の対応表がこれを止める。
+    // 探さずにいきなり消そうとする。説明文ではなくToolStateがこれを止める。
     const recorded = mockWorld([deleteCallReply(7), modelResponse([{ text: 'まず探すわね。' }])], fileExists);
 
     const turn = await runChatTurn({
@@ -876,7 +987,11 @@ describe('deleting a clip', () => {
       receivedAt: RECEIVED_AT,
     });
 
-    expect(toolOutput(turn.appended, 'delete_clip')).toEqual({ deleted: false, unknown_ref: 7 });
+    expect(toolOutput(turn.appended, 'delete_clip')).toEqual({
+      deleted: false,
+      ref: 'unknown-7',
+      ref_error: 'unknown_ref',
+    });
     expect(recorded.deletedPath).toBe('');
     expect(await countClips()).toBe(1);
   });

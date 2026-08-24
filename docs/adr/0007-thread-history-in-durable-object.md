@@ -3,6 +3,8 @@
 - ステータス: Accepted
 - 日付: 2026-08-16
 
+> 更新: 会話履歴を無期限に保持する判断は[ADR 0022](0022-persist-tool-refs-in-durable-object.md)で変更し、90日を超えたturnと処理済みeventをAlarm APIで削除する。
+
 ## 背景
 
 [ADR 0006](0006-agent-with-save-tool.md) でSlackの入力をすべてAIへ渡すことにしたが、Slackのイベントは1通ごとに独立したWorkerの起動であり、ターンをまたぐ状態がどこにも無い。
