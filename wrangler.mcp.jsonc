@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "reading-clipper-mcp-edge",
+  "name": "reading-clipper-mcp",
   "main": "src/mcp-edge.ts",
   "compatibility_date": "2026-08-01",
   "workers_dev": false,
