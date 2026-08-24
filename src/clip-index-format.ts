@@ -18,10 +18,14 @@ function markdownLabel(value: string): string {
   return value.replace(/\s+/gu, ' ').trim().replace(/([\\\[\]])/gu, '\\$1');
 }
 
-/** READMEはclips/にあるので、その下から辿る相対URLへ変える。 */
-function clipHref(path: string): string {
-  const relative = path.startsWith('clips/') ? path.slice('clips/'.length) : path;
-  return `./${relative.split('/').map(encodeURIComponent).join('/')}`;
+function sourceHref(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function clipHost(url: string | null): string {
@@ -46,7 +50,9 @@ export function renderClipIndex(entries: ClipIndexEntry[]): string {
   if (entries.length === 0) return `${heading}まだクリップはない。\n`;
 
   const rows = entries.map((entry) => {
-    const link = `[${markdownLabel(entry.title)}](<${clipHref(entry.path)}>)`;
+    const label = markdownLabel(entry.title);
+    const href = sourceHref(entry.url);
+    const link = href ? `[${label}](<${href}>)` : label;
     return `- ${[clippedDay(entry.clippedAt), link, clipHost(entry.url)].filter(Boolean).join(' · ')}`;
   });
   return `${heading}${rows.join('\n')}\n`;
