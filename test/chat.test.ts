@@ -211,7 +211,9 @@ describe('chat turn', () => {
     expect(recorded.savedPath).toBe('clips/Worker設計.md');
     expect(recorded.savedMarkdown).toContain('## 概要\n\nQueueで重い処理を分離する。');
     expect(recorded.savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい');
-    expect(recorded.indexMarkdown).toContain('[Worker設計](<./Worker%E8%A8%AD%E8%A8%88.md>)');
+    expect(recorded.indexMarkdown).toContain(
+      '[Worker設計](<https://qiita.com/alice/items/abc>)',
+    );
 
     // 本文が会話に現れるのはロードの1回だけ。保存の結果には入れない（ADR 0012）。
     const load = toolOutput(turn.appended, 'load_content');

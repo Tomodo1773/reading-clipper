@@ -31,16 +31,16 @@ beforeEach(async () => {
 });
 
 describe('renderClipIndex', () => {
-  it('renders a JST date, escaped title, relative link, and host', () => {
+  it('renders a JST date, escaped title, source link, and host', () => {
     expect(renderClipIndex([{ ...clip(), title: 'Worker [設計]' }])).toBe(
       `${CLIP_INDEX_MARKER}\n` +
         '# Clips\n\n' +
         '最近追加した20件を、新しい順に表示している。\n\n' +
-        '- 8/19 · [Worker \\[設計\\]](<./Worker%20%E8%A8%AD%E8%A8%88.md>) · zenn.dev\n',
+        '- 8/19 · [Worker \\[設計\\]](<https://zenn.dev/alice/articles/worker>) · zenn.dev\n',
     );
   });
 
-  it('supports old nested paths and omits invalid optional metadata', () => {
+  it('renders old entries with invalid optional metadata as plain titles', () => {
     const rendered = renderClipIndex([
       {
         path: 'clips/qiita.com/記事 (1).md',
@@ -50,7 +50,7 @@ describe('renderClipIndex', () => {
       },
     ]);
 
-    expect(rendered).toContain('[記事 (1)](<./qiita.com/%E8%A8%98%E4%BA%8B%20(1).md>)');
+    expect(rendered).toContain('- 記事 (1)');
     expect(rendered).not.toContain('not a URL');
   });
 
@@ -110,7 +110,9 @@ describe('refreshClipIndex', () => {
     await refreshClipIndex(await envWithKey());
 
     expect(written).toContain(CLIP_INDEX_MARKER);
-    expect(written).toContain('[Worker設計](<./Worker%E8%A8%AD%E8%A8%88.md>)');
+    expect(written).toContain(
+      '[Worker設計](<https://zenn.dev/alice/articles/worker>)',
+    );
     expect(message).toBe('Add clip index');
   });
 
