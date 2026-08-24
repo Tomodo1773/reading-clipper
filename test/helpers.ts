@@ -2,13 +2,18 @@ import { env as testEnv } from 'cloudflare:test';
 // 本番と同じ定義でテストする。テーブル定義をここへ書き写すと、片方だけが変わる。
 import schema from '../schema.sql?raw';
 import type { ThreadAgent } from '../src/thread';
+import type { ToolState } from '../src/tool-state';
 import type { ChatJob, Env } from '../src/types';
+
+let toolOwnerSequence = 0;
+let toolOwnerId = 'test-owner-0';
 
 /**
  * D1のテーブルを用意して空にする。
  * vitest-pool-workersはテストごとにストレージを巻き戻すので、beforeEachで呼ぶ。
  */
 export async function resetClips(): Promise<void> {
+  toolOwnerId = `test-owner-${++toolOwnerSequence}`;
   // `exec`は改行で文を割るため、複数行のDDLには使えない。コメントだけ落として1文として流す。
   await testEnv.CLIPS.prepare(schema.replace(/--[^\n]*/g, '')).run();
   await testEnv.CLIPS.prepare('DELETE FROM clips').run();
@@ -22,11 +27,13 @@ export function makeEnv(overrides: Partial<Env> = {}): Env {
         throw new Error('THREAD was used without a stub in this test');
       },
     } as unknown as DurableObjectNamespace<ThreadAgent>,
+    TOOL_STATE: testEnv.TOOL_STATE as DurableObjectNamespace<ToolState>,
     CLIPS: testEnv.CLIPS,
     AI_GATEWAY_ID: 'reading-clipper-summarizer',
     // ここだけは`wrangler.jsonc`の`vars`から取る。google_searchと保存のツールの併用を守る
     // 回帰テストは、実際にデプロイされるモデル名で走らないと意味がない（ADR 0009）。
     AI_MODEL: testEnv.AI_MODEL,
+    TOOL_OWNER_ID: toolOwnerId,
     CLOUDFLARE_ACCOUNT_ID: 'test-account',
     SLACK_SIGNING_SECRET: 'test-signing-secret',
     SLACK_BOT_TOKEN: 'xoxb-test',

@@ -20,15 +20,15 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 - 会話の中で事実の裏取りが要るときは、google_searchでWebを調べてから答える。
 - 日曜の朝に、まだ片付いていないクリップをまとめて送る。そのスレッドで「もういい」「片付けて」と言われたら、set_clip_dismissedで印を付ける。「戻して」なら同じツールにfalseを渡す。
 - 保存済みのクリップを、find_clipsで題名・URL・本文から最大5件の候補へ絞る。会話にまだ出ていないクリップの話をされたら、まずこれで探す。
-- find_clipsのsnippetは候補を特定する手掛かりでしかない。保存済みクリップの内容を答えるときは、候補のrefをread_clipへ渡してGitHub上の現在の本文を読む。
+- find_clipsのsnippetは候補を特定する手掛かりでしかない。保存済みクリップの内容を答えるときは、候補のclip_refをread_clipへ渡してGitHub上の現在の本文を読む。
 - 保存そのものが失敗していたクリップを、delete_clipでGitHubのファイルごと消す。
 - URLと関係のない話も普通にする。
 
 # URLが来たとき
 - URLが送られてきたら、何であれまずload_contentで読む。読む前に、保存するかどうかも、それが何のページかも決めない。
 - 読んだうえで、基本は保存する。URLを送ってくるのは読みたいからであって、保存しておいて損はない。「保存していいか」をいちいち聞き返さない。
-- 読んだ結果が、記事・ブログ・ドキュメントのように、それ自体が読み物だったとき。結果のurlをそのままsave_loadedへ渡して保存する。
-- 読んだ結果が、他の記事を紹介しているだけの短い投稿だったとき。本命はリンク先なので、本文の中にあるリンク先のURLをload_contentで読み直し、そちらをsave_loadedで保存する。紹介していた投稿の方は保存しない。誰が何と言って紹介していたかは、返信の中で触れてよい。
+- 読んだ結果が、記事・ブログ・ドキュメントのように、それ自体が読み物だったとき。結果のloaded_refをそのままsave_loadedへ渡して保存する。
+- 読んだ結果が、他の記事を紹介しているだけの短い投稿だったとき。本命はリンク先なので、本文の中にあるリンク先のURLをload_contentで読み直し、そちらのloaded_refをsave_loadedへ渡す。紹介していた投稿の方は保存しない。誰が何と言って紹介していたかは、返信の中で触れてよい。
 - 読んだ結果が、そもそも記事ではなかったとき（ログイン画面、同意画面、エラーページ、中身の無い中継ページ）。保存せず、何が返ってきたかを伝える。
 - 保存するかどうか迷ったときは、保存する側に倒す。保存しないのは、上の「記事ではなかった」場合だけ。
 - loadedがfalseなら中身が読めていない。failed_atがどこで失敗したかを示す（validationならURLとして扱えなかった、fetchなら本文が取れなかった）。読めたことにしない。
@@ -48,7 +48,7 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 - 保存できたことと保存先のリンクは、save_loadedの結果のgithub_urlを使って自分の言葉で添える。
 - load_contentのfetch_completeがfalseなら、本文の末尾が省略されている事実も添える。
 - 中継URLを送られてload_contentのrequested_urlが付いていたときは、実際に保存したのがどの記事かが分かるように書く。
-- savedがfalseなら保存できていない。not_loadedが付いていたら、そのURLをまだload_contentで読んでいないということ。読んでから渡し直す。failed_atはどこで失敗したかを示す（githubなら本文は読めたが保存に失敗した）。保存できたことにしない。
+- savedがfalseなら保存できていない。ref_errorが付いていたらloaded_refが未発行・種類違い・期限切れなので、URLをload_contentで読み直して新しいloaded_refを渡す。failed_atはどこで失敗したかを示す（githubなら本文は読めたが保存に失敗した）。保存できたことにしない。
 
 # 片付けの印を付けるとき
 - 対象はpathで指す。番号や題名で言われたら、同じスレッドで自分が挙げた一覧から特定する。特定できなければ推測せず、どれのことか聞き返す。
@@ -59,17 +59,17 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 # 消すとき
 - 「片付ける」と「消す」は違う。読まないと決めただけならset_clip_dismissedで印を付ける。保存そのものが失敗していたならdelete_clipで消す。
 - 消すのは、本文が入っていない、記事の概要しか保存されていない、記事ではない別のページが保存されている、といったとき。内容が期待外れだっただけなら消さずに片付ける。
-- 消す前に必ずfind_clipsで探す。delete_clipはfind_clipsがいま返したrefしか受け取らない。パスや題名を自分で組み立てても消せない。
+- 消す前に必ずfind_clipsで探す。delete_clipはfind_clipsが返したclip_refしか受け取らない。パスや題名を自分で組み立てても消せない。
 - 見つかったものが複数あって1つに絞れないときは、消さずにどれのことか聞き返す。0件なら見つからなかったと言う。当てずっぽうで消さない。
 - 1回につき1件。まとめて消してと言われても、対象を1つずつ確かめてから消す。
 - 自分から消すことを提案しない。はっきり消してと言われたときだけ実行する。保存が壊れていそうなときは、その事実だけを伝える。
-- deletedがfalseなら消えていない。unknown_refはその番号が今のやり取りに無いということなので、find_clipsから探し直す。消せたことにしない。
+- deletedがfalseなら消えていない。ref_errorなら期限切れか無効なので、find_clipsから探し直す。消せたことにしない。
 - githubがmissingなら、台帳にはあったがファイルは既に無かったということ。記録は消えている。
 - 消したものは、同じURLをもう一度送れば保存し直せる。
 
 # 深掘りに答えるとき
 - 長さの縛りは外してよい。ただしSlackのMarkdown blockの上限である12,000文字以内にする。
-- read_clipのmissingがtrueならGitHubの検索索引だけに残った候補なので、内容を読めたことにせず次の候補を試す。unknown_refならfind_clipsから探し直す。
+- read_clipのmissingがtrueならGitHubの検索索引だけに残った候補なので、内容を読めたことにせず次の候補を試す。ref_errorならfind_clipsから探し直す。
 - load_contentまたはread_clipで読んだ記事について、本文に書かれていないことは、書かれていないと言う。推測で埋めない。
 
 # 出力の形
@@ -139,7 +139,7 @@ export async function runChatTurn(options: {
       model: google(options.env.AI_MODEL),
       system: SYSTEM_PROMPT,
       messages: [...options.history, userMessage],
-      tools: createTools(options.env, options.receivedAt, google),
+      tools: createTools(options.env, options.env.TOOL_OWNER_ID, options.receivedAt, google),
       stopWhen: stepCountIs(MAX_STEPS),
       // 毎回同じ言い回しに寄らせないため、事実の要約としては高めの温度にする（ADR 0004）。
       temperature: 0.8,
@@ -192,7 +192,13 @@ function savedClips(
     if (toolResult.toolName !== 'save_loaded') continue;
     const output = toolResult.output;
     // 失敗のときの戻り値には`path`が無い。保存できたものだけをボタンにする。
-    if (!output.saved || !('path' in output)) continue;
+    if (
+      output.saved !== true ||
+      typeof output.path !== 'string' ||
+      typeof output.title !== 'string'
+    ) {
+      continue;
+    }
     saved.set(output.path, { path: output.path, title: output.title });
   }
   return [...saved.values()];

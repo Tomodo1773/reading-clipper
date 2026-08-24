@@ -1,13 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
+import { alarmTime, expiresAt } from './retention';
 import type { Env, SavedClip } from './types';
 
-/**
- * Slackのスレッド1本ぶんの会話（ADR 0007）。`{channel}:{thread_ts}` で引く。
- *
- * 持つのは会話の読み書きだけで、モデルの呼び出しはQueue consumer側で行う（ADR 0008）。
- * 会話はモデルへ渡す形のまま、ツール呼び出しとその結果を含めて追記していく。
- * 記事本文はツール結果の中に残るため、2ターン目以降に取得も読み直しも行わない。
- */
+/** Slackスレッド1本ぶんの会話。モデル呼び出しはQueue consumer側に残す。 */
 export class ThreadAgent extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -16,20 +11,18 @@ export class ThreadAgent extends DurableObject<Env> {
         `CREATE TABLE IF NOT EXISTS turns (
            seq INTEGER PRIMARY KEY AUTOINCREMENT,
            message TEXT NOT NULL,
-           at TEXT NOT NULL
+           at TEXT NOT NULL,
+           expires_at TEXT
          )`,
       );
-      // 返信本文まで持つのは、Slackへの投稿だけが失敗した再試行で会話をやり直さないため。
       ctx.storage.sql.exec(
         `CREATE TABLE IF NOT EXISTS handled (
            event_id TEXT PRIMARY KEY,
            reply TEXT NOT NULL,
-           at TEXT NOT NULL
+           at TEXT NOT NULL,
+           expires_at TEXT
          )`,
       );
-      // そのターンで保存できたクリップ。再試行では返信を投げ直すだけでモデルを動かさないため、
-      // ここに残しておかないと、投稿し直した返信からボタンだけが落ちる（ADR 0015）。
-      // `handled`へ列を足さず表を分けるのは、既にあるDOへは`ALTER`が要るため。
       ctx.storage.sql.exec(
         `CREATE TABLE IF NOT EXISTS handled_clips (
            event_id TEXT NOT NULL,
@@ -38,25 +31,40 @@ export class ThreadAgent extends DurableObject<Env> {
            PRIMARY KEY (event_id, path)
          )`,
       );
+      this.addColumnIfMissing('turns', 'expires_at', 'TEXT');
+      this.addColumnIfMissing('handled', 'expires_at', 'TEXT');
+      // 旧rowも保存時刻から90日に揃える。
+      ctx.storage.sql.exec(
+        `UPDATE turns
+            SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', at, '+90 days')
+          WHERE expires_at IS NULL`,
+      );
+      ctx.storage.sql.exec(
+        `UPDATE handled
+            SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', at, '+90 days')
+          WHERE expires_at IS NULL`,
+      );
+      ctx.storage.sql.exec(
+        'CREATE INDEX IF NOT EXISTS turns_expires_at ON turns (expires_at)',
+      );
+      ctx.storage.sql.exec(
+        'CREATE INDEX IF NOT EXISTS handled_expires_at ON handled (expires_at)',
+      );
+      await this.deleteExpiredAndSchedule();
     });
   }
 
-  /**
-   * これまでの会話と、このイベントを処理済みなら書き上げてある返信を返す。
-   *
-   * 会話はJSON文字列のまま受け渡す。`ModelMessage`はunionが深く、RPCの型解決が発散するため。
-   * `saved`はその返信に付けるボタンの材料で、素の構造なのでそのまま返す。
-   */
-  load(eventId: string): { history: string[]; reply?: string; saved: SavedClip[] } {
+  async load(eventId: string): Promise<{ history: string[]; reply?: string; saved: SavedClip[] }> {
+    await this.deleteExpiredAndSchedule();
     const history = this.ctx.storage.sql
       .exec<{ message: string }>('SELECT message FROM turns ORDER BY seq')
       .toArray()
       .map((row) => row.message);
     const saved = this.ctx.storage.sql
-      .exec<{
-        path: string;
-        title: string;
-      }>('SELECT path, title FROM handled_clips WHERE event_id = ?', eventId)
+      .exec<{ path: string; title: string }>(
+        'SELECT path, title FROM handled_clips WHERE event_id = ?',
+        eventId,
+      )
       .toArray();
     const reply = this.ctx.storage.sql
       .exec<{ reply: string }>('SELECT reply FROM handled WHERE event_id = ?', eventId)
@@ -64,26 +72,27 @@ export class ThreadAgent extends DurableObject<Env> {
     return reply === undefined ? { history, saved } : { history, reply, saved };
   }
 
-  /**
-   * 会話へ書き足すだけ。Slackのイベントに紐づかない書き込みに使う。
-   * 週次ダイジェストは、投稿した内容をこれでスレッドの文脈にする（ADR 0010）。
-   */
-  append(messages: string[]): void {
+  async append(messages: string[]): Promise<void> {
     const at = new Date().toISOString();
-    for (const message of messages) {
-      this.ctx.storage.sql.exec('INSERT INTO turns (message, at) VALUES (?, ?)', message, at);
-    }
+    this.insertTurn(messages, at);
+    await this.scheduleNextAlarm();
   }
 
-  /** 1ターンぶんをまとめて書く。途中で落ちたターンは何も残さない。 */
-  save(eventId: string, appended: string[], reply: string, saved: SavedClip[]): void {
+  /** appendedに含まれるtool call/resultを同じ期限で保存する。 */
+  async save(
+    eventId: string,
+    appended: string[],
+    reply: string,
+    saved: SavedClip[],
+  ): Promise<void> {
     const at = new Date().toISOString();
-    this.append(appended);
+    this.insertTurn(appended, at);
     this.ctx.storage.sql.exec(
-      'INSERT INTO handled (event_id, reply, at) VALUES (?, ?, ?)',
+      'INSERT INTO handled (event_id, reply, at, expires_at) VALUES (?, ?, ?, ?)',
       eventId,
       reply,
       at,
+      expiresAt(at),
     );
     for (const clip of saved) {
       this.ctx.storage.sql.exec(
@@ -93,5 +102,62 @@ export class ThreadAgent extends DurableObject<Env> {
         clip.title,
       );
     }
+    await this.scheduleNextAlarm();
+  }
+
+  async alarm(): Promise<void> {
+    await this.deleteExpiredAndSchedule();
+  }
+
+  private insertTurn(messages: string[], at: string): void {
+    const expiry = expiresAt(at);
+    for (const message of messages) {
+      this.ctx.storage.sql.exec(
+        'INSERT INTO turns (message, at, expires_at) VALUES (?, ?, ?)',
+        message,
+        at,
+        expiry,
+      );
+    }
+  }
+
+  private addColumnIfMissing(table: 'turns' | 'handled', column: string, type: string): void {
+    const columns = this.ctx.storage.sql
+      .exec<{ name: string }>(`PRAGMA table_info(${table})`)
+      .toArray();
+    if (!columns.some((value) => value.name === column)) {
+      this.ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+
+  private async deleteExpiredAndSchedule(now = new Date().toISOString()): Promise<void> {
+    this.ctx.storage.sql.exec(
+      `DELETE FROM handled_clips
+        WHERE event_id IN (SELECT event_id FROM handled WHERE expires_at <= ?)`,
+      now,
+    );
+    this.ctx.storage.sql.exec('DELETE FROM handled WHERE expires_at <= ?', now);
+    // 同じappend/saveの全messageは同じexpires_atなので、tool call/resultを分断しない。
+    this.ctx.storage.sql.exec('DELETE FROM turns WHERE expires_at <= ?', now);
+    await this.scheduleNextAlarm();
+  }
+
+  private async scheduleNextAlarm(): Promise<void> {
+    const next = this.ctx.storage.sql
+      .exec<{ expires_at: string }>(
+        `SELECT MIN(expires_at) AS expires_at FROM (
+           SELECT expires_at FROM turns WHERE expires_at IS NOT NULL
+           UNION ALL
+           SELECT expires_at FROM handled WHERE expires_at IS NOT NULL
+         )`,
+      )
+      .toArray()[0]?.expires_at;
+    const current = await this.ctx.storage.getAlarm();
+    if (!next) {
+      if (current !== null) await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    const target = alarmTime(next);
+    if (current === null || current !== target) await this.ctx.storage.setAlarm(target);
   }
 }

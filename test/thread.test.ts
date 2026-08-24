@@ -1,6 +1,7 @@
-import { env } from 'cloudflare:test';
+import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { Env } from '../src/types';
+import type { ThreadAgent } from '../src/thread';
 
 const testEnv = env as unknown as Env;
 
@@ -50,5 +51,37 @@ describe('ThreadAgent', () => {
     expect((await stub.load('EvSaved')).saved).toEqual([clip]);
     // 保存が起きたのはそのターンだけ。別のイベントには付いてこない。
     expect((await stub.load('EvOther')).saved).toEqual([]);
+  });
+
+  it('stores a tool call and result as one expiring turn', async () => {
+    const stub = thread('D123:turn-expiry-group');
+    await stub.save('EvTurn', [greeting, answer], '保存したわ。', []);
+
+    const rows = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ expires_at: string }>(
+          'SELECT expires_at FROM turns ORDER BY seq',
+        )
+        .toArray(),
+    );
+    expect(new Set(rows.map((row) => row.expires_at)).size).toBe(1);
+  });
+
+  it('deletes expired turns, handled events, and saved reply clips from the alarm', async () => {
+    const stub = thread('D123:retention-alarm');
+    await stub.save('EvOld', [greeting, answer], '古い返信', [
+      { path: 'clips/old.md', title: 'old' },
+    ]);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE turns SET expires_at = '2000-01-01T00:00:00.000Z'",
+      );
+      state.storage.sql.exec(
+        "UPDATE handled SET expires_at = '2000-01-01T00:00:00.000Z'",
+      );
+    });
+
+    await runInDurableObject(stub, (instance) => (instance as ThreadAgent).alarm());
+    expect(await stub.load('EvOld')).toEqual({ history: [], saved: [] });
   });
 });

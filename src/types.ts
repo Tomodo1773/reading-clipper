@@ -1,4 +1,5 @@
 import type { ThreadAgent } from './thread';
+import type { ToolState } from './tool-state';
 
 export type ClipSource = 'qiita' | 'zenn' | 'x' | 'web';
 
@@ -44,10 +45,14 @@ export interface Env {
   CLIP_QUEUE: Queue<ChatJob>;
   /** スレッド単位の会話状態。`{channel}:{thread_ts}` で引く。 */
   THREAD: DurableObjectNamespace<ThreadAgent>;
+  /** owner単位のopaque tool ref（ADR 0022）。 */
+  TOOL_STATE: DurableObjectNamespace<ToolState>;
   /** 読書状態。GitHubに対する注釈レイヤーで、母集団の正本ではない（ADR 0010）。 */
   CLIPS: D1Database;
   AI_GATEWAY_ID: string;
   AI_MODEL: string;
+  /** 通常BotとMCP Core RPCが共有する単一利用者の内部ID。 */
+  TOOL_OWNER_ID: string;
 
   // secrets
   CLOUDFLARE_ACCOUNT_ID: string;

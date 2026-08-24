@@ -44,6 +44,6 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      # wrangler.jsonc の構文とbindingsを、デプロイせずに検証する。
-      - name: Validate Worker configuration
-        run: pnpm wrangler deploy --dry-run
+      # CoreとMCP Edgeの構文・bindingsを、デプロイせずに検証する。
+      - name: Validate Worker configurations
+        run: pnpm dry-run

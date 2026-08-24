@@ -19,7 +19,10 @@
 | `src/index.ts` | Slack受付（slack-edge）、Queueへの登録、cronの入口。ここでは積むだけです |
 | `src/processor.ts` | Queue consumer。1ジョブの実行とエラーのステージ分類 |
 | `src/chat.ts` | AI SDKでのモデル呼び出し1ターン |
-| `src/tools.ts` | モデルへ渡すツール定義（読む／保存する／探す／消す） |
+| `src/tool-contract.ts` | BotとMCP Edgeで共有するツール名・schema・説明 |
+| `src/tools.ts` | 共通ツール処理とAI SDK adapter（読む／保存する／探す／消す） |
+| `src/core-rpc.ts` / `src/mcp-edge.ts` | Service Binding RPCと公開`/mcp`境界 |
+| `src/tool-state.ts` / `src/retention.ts` | owner単位のopaque refと90日Alarm cleanup |
 | `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
 | `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / Firecrawl） |
 | `src/url.ts` | canonical化、種別判定、保存先パスの決定 |
@@ -42,7 +45,7 @@ package managerはpnpmで、versionは `package.json` の `packageManager` で�
 | 依存の取得 | `sfw pnpm install` |
 | テスト | `pnpm test` |
 | 型検査 | `pnpm typecheck` |
-| Worker設定の検証 | `pnpm wrangler deploy --dry-run` |
+| Worker設定の検証 | `pnpm dry-run`（Bot/CoreとMCP Edgeの両方） |
 | ローカル起動 | `pnpm dev` |
 | AI Gatewayの作成・更新 | `pnpm setup:aigw` |
 | D1スキーマの適用 | `pnpm wrangler d1 execute reading-clipper-clips-db --local --file=./schema.sql`（本番は `--remote`） |

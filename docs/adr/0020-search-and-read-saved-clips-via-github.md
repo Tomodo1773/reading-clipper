@@ -3,6 +3,8 @@
 - ステータス: Accepted
 - 日付: 2026-08-23
 
+> 更新: GitHubを検索・読取の正本にする判断は維持する。`read_clip`が受けるrefの保持範囲は[ADR 0022](0022-persist-tool-refs-in-durable-object.md)で変更し、ターンを越えて90日使えるopaque refにする。
+
 ## 背景
 
 `find_clips`はD1の`title` / `url` / `path`だけを部分一致で探していた。本文はGitHubにしかなく、保存したスレッドを離れると、本文にしか出ない語から記事を探すことも、見つけた記事を読み返すこともできない。

@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reading-clipper-mcp-edge",
+  "main": "src/mcp-edge.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "services": [
+    {
+      "binding": "CORE",
+      "service": "reading-clipper",
+      "entrypoint": "CoreMcpEntrypoint"
+    }
+  ],
+  // Custom Domainは実環境固有なのでrepositoryへ書かず、deploy後に手動設定する（ADR 0021）。
+  // Access関連値は実環境のapplicationへ紐づくため、Worker secretで設定する。
+}

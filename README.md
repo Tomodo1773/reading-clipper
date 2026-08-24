@@ -2,7 +2,7 @@
 
 SlackへURLを送るだけで、記事の保存・要約・再発見までをまとめて扱える個人用リーディングクリッパー。
 
-![Reading Clipperのシステム構成](docs/architecture/architecture.svg)
+![Bot/Core Workerの内部構成](docs/architecture/architecture.svg)
 
 ## 概要
 
@@ -59,21 +59,31 @@ D1は厳密な既読・未読管理ではなく、GitHub上のクリップへ付
 
 ## システム構成
 
-構成図は静的な依存関係を示す。矢印は主要な連携を表し、完全なリクエスト・レスポンスの時系列ではない。
+上の構成図はBot/Core Workerの内部を示す。矢印は主要な連携を表し、完全なリクエスト・レスポンスの時系列ではない。MCP公開境界は下で別に説明する。
 
-受付、Queue処理、週次cronは1つのCloudflare Workerへ同居させている。AI Gateway経由でGeminiを呼び、記事本文はGitHub、会話履歴はDurable Objects、ダイジェスト用の状態はD1へ保存する。
+Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、公開MCP境界だけをMCP Edge Workerへ分離している。AI Gateway経由でGeminiを呼び、記事本文はGitHub、会話履歴とtool refはDurable Objects、ダイジェスト用の状態はD1へ保存する。
 
 構成図の編集元とアイコンの出典は[`docs/architecture/`](docs/architecture/)にある。
+
+### MCP公開
+
+現在のWorkerをBot/Coreとして残し、公開`/mcp`だけを持つMCP Edge Workerを同じrepositoryから別deployする。外部MCP clientはCloudflare Access Managed OAuthで保護したCustom Domainへ接続し、MCP EdgeからCoreへはDNSを通さずService Binding RPCで到達する。通常Botは公開MCPを経由せず、両方の入口が同じCore use caseを呼ぶ。
+
+`load_content` / `save_loaded`と`find_clips` / `read_clip` / `delete_clip`の受け渡しは、owner単位のDurable Objectに置くopaque refを使う。通常BotとMCPで同じtool contractを共有し、会話履歴とrefは90日で削除する。MCP tool callは同期で処理し、既存QueueはSlackの3秒ACKと再試行のためだけに残す。詳細と判断理由は[ADR 0021](docs/adr/0021-publish-tools-through-mcp-edge.md)と[ADR 0022](docs/adr/0022-persist-tool-refs-in-durable-object.md)に記録している。
+
+MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、EdgeへCustom Domainを手動設定し、そのhostname全体をAccess applicationで保護してManaged OAuthを有効にする。EdgeはCloudflareが検証済みの`ctx.access`からaudienceと本人identityを確認する。必要な実環境値は`ACCESS_AUD`、`ACCESS_ALLOWED_EMAIL`、`MCP_HOSTNAME`で、Coreの業務secretは渡さない。`workers.dev`とpreview URLは無効化している。
+
+`ACCESS_AUD`にはAccess applicationのaudience tag、`ACCESS_ALLOWED_EMAIL`には許可する本人のemail、`MCP_HOSTNAME`にはschemeを含まないCustom Domainのhostnameを設定する。Custom Domain、Access application / policy / Managed OAuth、MCP Edge用のWorkers Builds接続は実環境で手動設定する。
 
 ## 技術スタック
 
 | 分類 | 技術 | 役割 |
 | --- | --- | --- |
 | 言語 | TypeScript | Worker、取得処理、GitHub連携 |
-| HTTP | Hono | Slack Events API、Interactivity、health check |
+| HTTP / MCP | slack-edge / MCP TypeScript SDK | Slack Events API、Interactivity、Streamable HTTP |
 | 実行基盤 | Cloudflare Workers | HTTP受付、Queue consumer、scheduled handler |
 | 非同期処理 | Cloudflare Queues | Slack受付と本文取得・AI処理を分離 |
-| 会話状態 | Cloudflare Durable Objects | Slackスレッド単位の会話履歴 |
+| 会話・tool状態 | Cloudflare Durable Objects | Slackスレッド単位の会話履歴、owner単位のopaque ref、90日Alarm cleanup |
 | ダイジェスト状態 | Cloudflare D1 / Cron Triggers | 片付け状態、再掲履歴、週次実行 |
 | AI | Vercel AI SDK / Gemini / Cloudflare AI Gateway | 要約、質問応答、保存対象の判断 |
 | 本文取得 | Qiita Markdown / Zenn API / X API / Firecrawl | URLごとの本文取得 |
@@ -133,7 +143,7 @@ Slack AppはDMの`message.im`をEvents APIで受信し、Interactivityで片付�
 ```powershell
 pnpm test
 pnpm typecheck
-pnpm wrangler deploy --dry-run
+pnpm dry-run
 ```
 
 ## 制約
@@ -157,3 +167,5 @@ pnpm wrangler deploy --dry-run
 - [フラットな保存構造と新着順の表示を分離する](docs/adr/0017-generated-recent-clip-index.md)
 - [GitHubから消えたクリップは出す直前の実在確認で落とす](docs/adr/0018-verify-clip-exists-before-digest.md)
 - [保存済みクリップはGitHubで検索し、現在の本文を読み直す](docs/adr/0020-search-and-read-saved-clips-via-github.md)
+- [MCP公開境界を専用Workerへ分離し、Access Managed OAuthで保護する](docs/adr/0021-publish-tools-through-mcp-edge.md)
+- [ツール参照をDurable Objectへ90日保持し、BotとMCPで共通化する](docs/adr/0022-persist-tool-refs-in-durable-object.md)

@@ -4,6 +4,8 @@ import { DISMISS_ACTION_ID, dismissClip } from './dismiss';
 import { handleQueueMessage } from './processor';
 import type { ChatJob, Env } from './types';
 
+export { CoreMcpEntrypoint } from './core-rpc';
+export { ToolState } from './tool-state';
 export { ThreadAgent } from './thread';
 
 /** 受け取った印としてメッセージへ付ける絵文字。完了時に外さない。 */
