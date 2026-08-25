@@ -8,9 +8,9 @@ import {
   type FoundClip,
   recordClip,
   selectClipsByPath,
-  setClipDismissed,
   type ClipRow,
 } from './clips';
+import { applyClipDismissal } from './dismiss';
 import { asClipError, type ProcessingStage } from './errors';
 import { clipExcerpt } from './excerpt';
 import { loadContent } from './fetchers';
@@ -153,7 +153,7 @@ export async function saveLoadedTool(env: Env, ownerId: string, receivedAt: stri
 export async function setClipDismissedTool(env: Env, receivedAt: string, rawArgs: unknown) {
   const { path, dismissed } = coreToolSchemas.set_clip_dismissed.parse(rawArgs);
   try {
-    const found = await setClipDismissed(env, path, dismissed, receivedAt);
+    const found = await applyClipDismissal(env, { path, dismissed, at: receivedAt });
     return found ? { updated: true, path, dismissed } : { updated: false, unknown_path: path };
   } catch (error) {
     return { updated: false, failed_at: toolFailure(error, 'clips', 'set_clip_dismissed') };

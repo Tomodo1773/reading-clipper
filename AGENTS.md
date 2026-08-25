@@ -32,7 +32,7 @@
 | `src/clip-index.ts` / `src/clip-index-format.ts` | 新着一覧のGitHub同期と、importなしのMarkdown生成・生成物識別 |
 | `src/clips.ts` | D1へのアクセス。読書状態の注釈レイヤーです |
 | `src/digest.ts` | 週次ダイジェストの組み立て |
-| `src/dismiss.ts` | 片付けのボタンと押下処理。ダイジェストの行と、クリップ直後の返信で共通です |
+| `src/dismiss.ts` | 片付けの適用（D1の印と新着一覧の作り直し）と、そのボタン。ボタンとエージェントのツールの両方がここを通ります |
 | `src/errors.ts` | `ClipError` と `ProcessingStage`。失敗をどの段階のものとして扱うか |
 | `src/excerpt.ts` / `src/html.ts` | Worker側とNode側（バックフィル）の両方から呼びます。同じ入力から必ず同じ結果を出す必要があるため、**何もimportしない**制約があります |
 
