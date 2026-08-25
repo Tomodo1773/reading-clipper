@@ -8,6 +8,7 @@ import {
 } from '../src/clip-index-format';
 import { recordClip } from '../src/clips';
 import { resetGitHubTokenCache } from '../src/github';
+import { setClipDismissedTool } from '../src/tools';
 import { base64ToUtf8, utf8ToBase64 } from '../src/utils';
 import {
   generatePrivateKeyPem,
@@ -235,6 +236,53 @@ describe('refreshClipIndex', () => {
 
     await expect(refreshClipIndex(await envWithKey())).rejects.toThrow('not managed');
     expect(putCalled).toBe(false);
+  });
+
+  it('rewrites the index when the agent tool dismisses a clip', async () => {
+    // 片付けの入口はボタンとツールの2つあるが、一覧の作り直しまでが1つの操作である（ADR 0023）。
+    await seedClip();
+    const written: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/app/installations/') && method === 'POST') {
+        return jsonResponse({ token: 'token', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      if (url.endsWith('/contents/clips/README.md') && method === 'GET') {
+        return jsonResponse({ message: 'Not Found' }, 404);
+      }
+      if (url.endsWith('/contents/clips/README.md') && method === 'PUT') {
+        const body = JSON.parse(String(init?.body)) as { content: string };
+        written.push(base64ToUtf8(body.content));
+        return jsonResponse({ content: { sha: 'sha', html_url: 'https://example.com/x' } }, 201);
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    });
+
+    const result = await setClipDismissedTool(await envWithKey(), '2026-08-20T00:00:00.000Z', {
+      path: 'clips/Worker設計.md',
+      dismissed: true,
+    });
+
+    expect(result).toEqual({ updated: true, path: 'clips/Worker設計.md', dismissed: true });
+    expect(written).toHaveLength(1);
+    expect(written[0]!).toContain('~~[Worker設計](');
+  });
+
+  it('leaves the index alone when the tool dismisses a path D1 does not have', async () => {
+    let requests = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      requests += 1;
+      return jsonResponse({});
+    });
+
+    const result = await setClipDismissedTool(await envWithKey(), '2026-08-20T00:00:00.000Z', {
+      path: 'clips/存在しない.md',
+      dismissed: true,
+    });
+
+    expect(result).toEqual({ updated: false, unknown_path: 'clips/存在しない.md' });
+    expect(requests).toBe(0);
   });
 
   it('refetches the SHA and retries once after a 409', async () => {

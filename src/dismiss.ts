@@ -120,7 +120,27 @@ export function clipReplyBlocks(reply: string, clips: SavedClip[]): AnyMessageBl
 }
 
 /**
- * ボタンからのDismiss。D1を更新してから、まだ片付いていない組だけのメッセージへ差し替える。
+ * 片付けの適用。入口はボタンとエージェントのツールの2つあるが、片付けとは
+ * 「D1へ印を書き、新着一覧を作り直すところまで」の1つの操作である（ADR 0023）。
+ * 取り消し線と件数を出す以上、どちらの入口から片付けても`clips/README.md`が揃う必要がある。
+ *
+ * 入口ごとに違うのは押した相手への返し方だけなので、それを`respond`で受ける。
+ * 一覧の作り直しより先に呼ぶのは、GitHubへの往復で手応えを遅らせないためである。
+ * 台帳に無いパスは書き込みが空振りするだけなので、一覧も作り直さない。
+ */
+export async function applyClipDismissal(
+  env: Env,
+  target: { path: string; dismissed: boolean; at: string },
+  respond?: () => Promise<void>,
+): Promise<boolean> {
+  const found = await setClipDismissed(env, target.path, target.dismissed, target.at);
+  await respond?.();
+  if (found) await refreshClipIndexBestEffort(env, target.path);
+  return found;
+}
+
+/**
+ * ボタンからのDismiss。片付けを適用し、まだ片付いていない組だけのメッセージへ差し替える。
  *
  * 押された組を落とすのではなくD1に問い直すのは、連続で押したときのため。
  * 2回目のpayloadは1回目の`chat.update`が届く前の`blocks`を含むので、
@@ -139,17 +159,18 @@ export async function dismissClip(
     blocks: AnyMessageBlock[];
   },
 ): Promise<void> {
-  await setClipDismissed(env, target.path, true, new Date().toISOString());
-  const alive = await selectUndismissed(env, [...clipPaths(target.blocks).values()]);
-  await new SlackAPIClient(env.SLACK_BOT_TOKEN).chat.update({
-    channel: target.channel,
-    ts: target.messageTs,
-    // 通知とblocksを読めないクライアント向けの文は、投稿時のものをそのまま持ち越す。
-    text: target.text,
-    blocks: keepAliveClips(target.blocks, alive),
-  });
-  // 取り消し線と件数はD1から作り直すので、押した結果をここで反映する（ADR 0023）。
-  // Slackの差し替えを先に済ませるのは、押した手応えを遅らせないためである。
-  // 押下はlazy handlerで走り30秒使えるので、Slackの3秒ACKには影響しない。
-  await refreshClipIndexBestEffort(env, target.path);
+  await applyClipDismissal(
+    env,
+    { path: target.path, dismissed: true, at: new Date().toISOString() },
+    async () => {
+      const alive = await selectUndismissed(env, [...clipPaths(target.blocks).values()]);
+      await new SlackAPIClient(env.SLACK_BOT_TOKEN).chat.update({
+        channel: target.channel,
+        ts: target.messageTs,
+        // 通知とblocksを読めないクライアント向けの文は、投稿時のものをそのまま持ち越す。
+        text: target.text,
+        blocks: keepAliveClips(target.blocks, alive),
+      });
+    },
+  );
 }
