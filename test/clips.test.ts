@@ -2,6 +2,7 @@ import { env as testEnv } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clipTitle,
+  countClips,
   deleteClip,
   markDigestShown,
   recordClip,
@@ -251,6 +252,25 @@ describe('selectRecentClips', () => {
       'clips/b.md',
     ]);
   });
+
+  it('reads the columns the card needs, including the dismissed mark', async () => {
+    await recordClip(env, {
+      path: 'clips/Workerの設計.md',
+      url: 'https://qiita.com/a/items/1',
+      title: 'Workerの設計',
+      excerpt: '抜粋',
+      imageUrl: 'https://qiita.com/ogp.png',
+      clippedAt: '2026-08-01T00:00:00.000Z',
+    });
+    await setClipDismissed(env, 'clips/Workerの設計.md', true, '2026-08-02T00:00:00.000Z');
+
+    expect((await selectRecentClips(env))[0]).toMatchObject({
+      title: 'Workerの設計',
+      excerpt: '抜粋',
+      imageUrl: 'https://qiita.com/ogp.png',
+      dismissedAt: '2026-08-02T00:00:00.000Z',
+    });
+  });
 });
 
 describe('clipTitle', () => {
@@ -280,5 +300,25 @@ describe('deleteClip', () => {
 
   it('reports a path that is not in the ledger instead of claiming success', async () => {
     expect(await deleteClip(env, 'clips/does-not-exist.md')).toBe(false);
+  });
+});
+
+describe('countClips', () => {
+  it('counts the whole ledger and what is left undismissed', async () => {
+    await seed([
+      { path: 'clips/a.md', clippedAt: '2026-08-01T00:00:00.000Z' },
+      {
+        path: 'clips/b.md',
+        clippedAt: '2026-08-02T00:00:00.000Z',
+        dismissedAt: '2026-08-03T00:00:00.000Z',
+      },
+      { path: 'clips/c.md', clippedAt: '2026-08-03T00:00:00.000Z' },
+    ]);
+
+    expect(await countClips(env)).toEqual({ total: 3, undismissed: 2 });
+  });
+
+  it('returns zeros for an empty ledger instead of NULL', async () => {
+    expect(await countClips(env)).toEqual({ total: 0, undismissed: 0 });
   });
 });

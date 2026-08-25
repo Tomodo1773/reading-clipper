@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { refreshClipIndex } from '../src/clip-index';
 import {
   CLIP_INDEX_MARKER,
+  type ClipIndexEntry,
   isGeneratedClipIndex,
   renderClipIndex,
 } from '../src/clip-index-format';
-import type { ClipRow } from '../src/clips';
 import { recordClip } from '../src/clips';
 import { resetGitHubTokenCache } from '../src/github';
 import { base64ToUtf8, utf8ToBase64 } from '../src/utils';
@@ -16,13 +16,30 @@ import {
   resetClips,
 } from './helpers';
 
-const clip = (overrides: Partial<ClipRow> = {}): ClipRow => ({
+const entry = (overrides: Partial<ClipIndexEntry> = {}): ClipIndexEntry => ({
   path: 'clips/Worker 設計.md',
   url: 'https://zenn.dev/alice/articles/worker',
   title: 'Worker [設計]',
+  excerpt: null,
+  imageUrl: null,
   clippedAt: '2026-08-18T15:30:00.000Z',
+  dismissedAt: null,
   ...overrides,
 });
+
+/** 新しい順に`count`件。`clipped_at`をずらして並びを固定する。 */
+const entries = (count: number, overrides: Partial<ClipIndexEntry> = {}): ClipIndexEntry[] =>
+  Array.from({ length: count }, (_, index) =>
+    entry({
+      path: `clips/記事${index}.md`,
+      title: `記事${index}`,
+      url: `https://zenn.dev/alice/articles/${index}`,
+      clippedAt: `2026-08-${String(20 - index).padStart(2, '0')}T00:00:00.000Z`,
+      ...overrides,
+    }),
+  );
+
+const counts = (total: number, undismissed: number) => ({ total, undismissed });
 
 beforeEach(async () => {
   vi.restoreAllMocks();
@@ -31,31 +48,111 @@ beforeEach(async () => {
 });
 
 describe('renderClipIndex', () => {
-  it('renders a JST date, escaped title, source link, and host', () => {
-    expect(renderClipIndex([{ ...clip(), title: 'Worker [設計]' }])).toBe(
+  it('renders the newest undismissed clip as a card with an escaped title and host', () => {
+    expect(renderClipIndex([entry()], counts(1, 1))).toBe(
       `${CLIP_INDEX_MARKER}\n` +
         '# Clips\n\n' +
-        '最近追加した20件を、新しい順に表示している。\n\n' +
-        '- 8/19 · [Worker \\[設計\\]](<https://zenn.dev/alice/articles/worker>) · zenn.dev\n',
+        '保存 1件 · まだ片付けていない 1件\n\n' +
+        '## 最近のクリップ\n\n' +
+        '**[Worker \\[設計\\]](<https://zenn.dev/alice/articles/worker>)**\n' +
+        '\n' +
+        '`zenn.dev` · 8/19\n',
     );
   });
 
-  it('renders old entries with invalid optional metadata as plain titles', () => {
-    const rendered = renderClipIndex([
-      {
-        path: 'clips/qiita.com/記事 (1).md',
-        url: 'not a URL',
-        title: '記事 (1)',
-        clippedAt: 'invalid',
-      },
-    ]);
+  it('stacks the OGP image above the title, without a table', () => {
+    const rendered = renderClipIndex(
+      [entry({ imageUrl: 'https://example.com/ogp.png', excerpt: '本文の冒頭。' })],
+      counts(1, 1),
+    );
 
-    expect(rendered).toContain('- 記事 (1)');
+    expect(rendered).toContain(
+      '<img src="https://example.com/ogp.png" width="320" alt="">\n\n**[Worker',
+    );
+    expect(rendered).toContain('本文の冒頭。');
+    expect(rendered).not.toContain('<table>');
+  });
+
+  it('drops an image whose URL is not http(s)', () => {
+    const rendered = renderClipIndex([entry({ imageUrl: 'javascript:alert(1)' })], counts(1, 1));
+
+    expect(rendered).not.toContain('<img');
+    expect(rendered).not.toContain('javascript:');
+  });
+
+  it('escapes markup that came from the article body', () => {
+    const rendered = renderClipIndex(
+      [entry({ title: '<script>alert(1)</script>', excerpt: '使い方は <b>太字</b> と & 記号' })],
+      counts(1, 1),
+    );
+
+    expect(rendered).toContain('使い方は &lt;b&gt;太字&lt;/b&gt; と &amp; 記号');
+    expect(rendered).toContain('&lt;script&gt;');
+    expect(rendered).not.toContain('<b>');
+  });
+
+  it('fills the card slots with undismissed clips and pushes the rest into the list', () => {
+    const recent = entries(7).map((item, index) =>
+      index === 1 ? { ...item, dismissedAt: '2026-08-21T00:00:00.000Z' } : item,
+    );
+
+    const rendered = renderClipIndex(recent, counts(7, 6));
+    const cards = rendered.slice(
+      rendered.indexOf('## 最近のクリップ'),
+      rendered.indexOf('## それ以前'),
+    );
+    const list = rendered.slice(rendered.indexOf('## それ以前'));
+
+    // 片付けた記事1はカードに入らず、6番目の記事5が繰り上がる。
+    expect(cards).toContain('記事0');
+    expect(cards).not.toContain('記事1');
+    expect(cards).toContain('記事5');
+    expect(cards).not.toContain('記事6');
+    // 箇条書きは元の並び順のまま。片付けたものだけ取り消し線で消す。
+    expect(list).toContain('- 8/19 · ~~[記事1](<https://zenn.dev/alice/articles/1>)~~ · zenn.dev');
+    expect(list).toContain('- 8/14 · [記事6](<https://zenn.dev/alice/articles/6>) · zenn.dev');
+  });
+
+  it('omits the card section when every recent clip is dismissed', () => {
+    const rendered = renderClipIndex(
+      entries(3, { dismissedAt: '2026-08-21T00:00:00.000Z' }),
+      counts(3, 0),
+    );
+
+    expect(rendered).not.toContain('## 最近のクリップ');
+    // 対比する相手がいないので、箇条書き側の見出しも出さない。
+    expect(rendered).not.toContain('## それ以前');
+    expect(rendered).toContain('~~[記事0](<https://zenn.dev/alice/articles/0>)~~');
+  });
+
+  it('renders old entries with invalid optional metadata as plain titles', () => {
+    const rendered = renderClipIndex(
+      [
+        entry({
+          path: 'clips/qiita.com/記事 (1).md',
+          url: 'not a URL',
+          title: '記事 (1)',
+          clippedAt: 'invalid',
+        }),
+      ],
+      counts(1, 1),
+    );
+
+    expect(rendered).toContain('**記事 (1)**');
     expect(rendered).not.toContain('not a URL');
   });
 
+  it('counts the whole shelf, not just the clips it shows', () => {
+    expect(renderClipIndex([entry()], counts(132, 41))).toContain(
+      '保存 132件 · まだ片付けていない 41件',
+    );
+  });
+
   it('renders an explicit empty state', () => {
-    expect(renderClipIndex([])).toContain('まだクリップはない。');
+    const rendered = renderClipIndex([], counts(0, 0));
+
+    expect(rendered).toContain('まだクリップはない。');
+    expect(rendered).toContain('保存 0件 · まだ片付けていない 0件');
   });
 });
 

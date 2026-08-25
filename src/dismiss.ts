@@ -1,4 +1,5 @@
 import { type AnyMessageBlock, SlackAPIClient } from 'slack-edge';
+import { refreshClipIndexBestEffort } from './clip-index';
 import { selectUndismissed, setClipDismissed } from './clips';
 import type { Env, SavedClip } from './types';
 
@@ -147,4 +148,8 @@ export async function dismissClip(
     text: target.text,
     blocks: keepAliveClips(target.blocks, alive),
   });
+  // 取り消し線と件数はD1から作り直すので、押した結果をここで反映する（ADR 0023）。
+  // Slackの差し替えを先に済ませるのは、押した手応えを遅らせないためである。
+  // 押下はlazy handlerで走り30秒使えるので、Slackの3秒ACKには影響しない。
+  await refreshClipIndexBestEffort(env, target.path);
 }
