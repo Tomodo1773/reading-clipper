@@ -1,6 +1,6 @@
 import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { tool } from 'ai';
-import { refreshClipIndex } from './clip-index';
+import { refreshClipIndexBestEffort } from './clip-index';
 import { isGeneratedClipIndex } from './clip-index-format';
 import {
   clipTitle,
@@ -83,14 +83,6 @@ async function findSavedClips(env: Env, query: string): Promise<SearchClip[]> {
       snippet: searchSnippet(match.snippet),
     };
   });
-}
-
-async function refreshClipIndexBestEffort(env: Env, path: string): Promise<void> {
-  try {
-    await refreshClipIndex(env);
-  } catch (error) {
-    toolFailure(error, 'github', 'refresh_clip_index', { path });
-  }
 }
 
 async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string) {

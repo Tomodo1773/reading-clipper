@@ -2,8 +2,11 @@ import { createExecutionContext, env as testEnv, waitOnExecutionContext } from '
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { digestBlocks } from '../src/digest';
 import { clipReplyBlocks } from '../src/dismiss';
+import { resetGitHubTokenCache } from '../src/github';
 import worker from '../src/index';
+import { base64ToUtf8 } from '../src/utils';
 import {
+  generatePrivateKeyPem,
   jsonResponse,
   makeEnv,
   readSlackCall,
@@ -100,11 +103,15 @@ async function seed(): Promise<void> {
 }
 
 /** 署名付きの押下を1回、waitUntilの完了まで含めて処理する。 */
-async function press(path = CLIP_PATH, overrides: Record<string, unknown> = {}): Promise<Response> {
+async function press(
+  path = CLIP_PATH,
+  overrides: Record<string, unknown> = {},
+  env: ReturnType<typeof makeEnv> = makeEnv(),
+): Promise<Response> {
   const ctx = createExecutionContext();
   const response = await worker.fetch(
     await signedInteractivityRequest(buttonPress(path, overrides)),
-    makeEnv(),
+    env,
     ctx,
   );
   await waitOnExecutionContext(ctx);
@@ -144,6 +151,39 @@ describe('ダイジェストのボタン押下', () => {
     expect(JSON.stringify(update.blocks)).toContain(OTHER_PATH);
     // 差し替えでもサムネイルを取り直さない。payloadのblocksをそのまま使う。
     expect(JSON.stringify(update.blocks)).toContain('別の抜粋');
+  });
+
+  it('rewrites the clip index so the dismissed clip is struck through', async () => {
+    await seed();
+    resetGitHubTokenCache();
+    const written: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const call = await readSlackCall(input);
+      if (call?.method === 'auth.test') return slackAuthTestResponse();
+      if (call?.method === 'chat.update') return jsonResponse({ ok: true });
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/app/installations/') && method === 'POST') {
+        return jsonResponse({ token: 'token', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      if (url.endsWith('/contents/clips/README.md') && method === 'GET') {
+        return jsonResponse({ message: 'Not Found' }, 404);
+      }
+      if (url.endsWith('/contents/clips/README.md') && method === 'PUT') {
+        const body = JSON.parse(String(init?.body)) as { content: string };
+        written.push(base64ToUtf8(body.content));
+        return jsonResponse({ content: { sha: 'sha', html_url: 'https://example.com/x' } }, 201);
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    });
+
+    await press(CLIP_PATH, {}, makeEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() }));
+
+    expect(written).toHaveLength(1);
+    // 片付けた記事はカードから外れ、箇条書きで消される。残った1件はカードのまま。
+    expect(written[0]!).toContain('~~[記事](');
+    expect(written[0]!).toContain('保存 2件 · まだ片付けていない 1件');
+    expect(written[0]!).toContain('**[別の記事](');
   });
 
   it('does not bring back a row that an earlier press already dismissed', async () => {

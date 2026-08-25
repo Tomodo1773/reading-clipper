@@ -37,6 +37,13 @@ export interface FoundClip extends ClipRow {
 }
 
 /**
+ * 新着一覧に出す1件。カードに使う列に加えて、取り消し線の判断に要る印まで読む（ADR 0023）。
+ */
+export interface RecentClip extends DigestClip {
+  dismissedAt: string | null;
+}
+
+/**
  * その行をどの題名で呼ぶか。
  *
  * ADR 0005でファイル名を記事タイトルそのものにしたので、`title`が無い行（バックフィル由来）
@@ -104,17 +111,39 @@ export async function selectDigestClips(env: Env): Promise<DigestClip[]> {
   return results;
 }
 
-/** 保存構造とは別の新着ビューを組み立てるため、片付け済みも含めて新しい順に読む。 */
-export async function selectRecentClips(env: Env): Promise<ClipRow[]> {
+/**
+ * 保存構造とは別の新着ビューを組み立てるため、片付け済みも含めて新しい順に読む。
+ *
+ * ここで`dismissed_at`を絞らないのはADR 0017のままである。カードへ出すか箇条書きへ
+ * 落とすかは表示側の判断なので、印はそのまま渡して振り分けさせる（ADR 0023）。
+ */
+export async function selectRecentClips(env: Env): Promise<RecentClip[]> {
   const { results } = await env.CLIPS.prepare(
-    `SELECT path, url, title, clipped_at AS clippedAt
+    `SELECT path, url, title, excerpt, image_url AS imageUrl, clipped_at AS clippedAt,
+            dismissed_at AS dismissedAt
        FROM clips
       ORDER BY clipped_at DESC, path ASC
       LIMIT ?`,
   )
     .bind(RECENT_CLIP_SIZE)
-    .all<ClipRow>();
+    .all<RecentClip>();
   return results;
+}
+
+/**
+ * 棚の規模と、まだ片付けていない量を数える。新着一覧の見出しに出す（ADR 0023）。
+ *
+ * 新着一覧は最新20件しか読まないので、全体の量はそこからは分からない。
+ * 表示のためだけの集計なので、2回に分けず1クエリで取る。
+ */
+export async function countClips(env: Env): Promise<{ total: number; undismissed: number }> {
+  const row = await env.CLIPS.prepare(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN dismissed_at IS NULL THEN 1 ELSE 0 END) AS undismissed
+       FROM clips`,
+  ).first<{ total: number; undismissed: number | null }>();
+  // 0件のとき SUM は NULL を返す。
+  return { total: row?.total ?? 0, undismissed: row?.undismissed ?? 0 };
 }
 
 /**

@@ -29,7 +29,7 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
 - **MarkdownをGitHubへ保存**
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存。
 - **最近保存したクリップをGitHubで一覧**
-  保存先の`clips/README.md`へ最新20件を新しい順で自動表示。タイトルから元の記事へ直接移動でき、記事のファイル名は日付で長くせずタイトルのまま保つ。
+  保存先の`clips/README.md`へ最新20件を新しい順で自動表示。まだ片付けていない上位5件はサムネイルと冒頭の抜粋を添えたカードで並べ、それ以前は箇条書きにする。片付けたクリップは取り消し線で消し、見出しには保存総数と残りの件数を出す。タイトルから元の記事へ直接移動でき、記事のファイル名は日付で長くせずタイトルのまま保つ。
 - **保存済みクリップを本文から探して読み返す**
   Slackで覚えている語を伝えると、GitHub上の題名・パス・本文から最大5件の候補を探し、選んだMarkdownだけを読んで質問へ答える。D1に記録が無いクリップも検索でき、削除済みの古い検索結果は本文を読む直前の実在確認で止める。
 - **その場で、または週次ダイジェストで片付け**
@@ -169,3 +169,4 @@ pnpm dry-run
 - [保存済みクリップはGitHubで検索し、現在の本文を読み直す](docs/adr/0020-search-and-read-saved-clips-via-github.md)
 - [MCP公開境界を専用Workerへ分離し、Access Managed OAuthで保護する](docs/adr/0021-publish-tools-through-mcp-edge.md)
 - [ツール参照をDurable Objectへ90日保持し、BotとMCPで共通化する](docs/adr/0022-persist-tool-refs-in-durable-object.md)
+- [新着一覧をカードと箇条書きに分け、片付けを表示に出す](docs/adr/0023-clip-index-cards-and-dismissed-marks.md)
