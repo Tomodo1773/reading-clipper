@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchContent, fetchPageHead, loadContent } from '../src/fetchers';
+import {
+  fetchContent,
+  fetchPageHead,
+  loadContent,
+  MAX_CONTENT_CHARS,
+  truncateContent,
+} from '../src/fetchers';
 import { htmlResponse, jsonResponse, makeEnv } from './helpers';
 
 afterEach(() => vi.restoreAllMocks());
@@ -287,6 +293,39 @@ describe('source fetchers', () => {
     expect(result.version).toBeUndefined();
   });
 
+});
+
+/**
+ * 上限は取得と読み直しで共有する（ADR 0026）。切ったことを黙って落とさないこと、
+ * そして**切った結果が必ず上限以下に収まる**ことが要件になる。後者が崩れると、
+ * 保存済みのクリップを読み直すたびに末尾が削れていく。
+ */
+describe('truncateContent', () => {
+  it('leaves content within the limit untouched', () => {
+    expect(truncateContent('短い本文')).toEqual({ text: '短い本文', truncated: false });
+  });
+
+  it('writes the cut into the body and still fits inside the limit', () => {
+    const { text, truncated } = truncateContent('あ'.repeat(MAX_CONTENT_CHARS + 500));
+    expect(truncated).toBe(true);
+    expect(text).toContain('本文は200,000文字で省略した。');
+    expect(text.length).toBeLessThanOrEqual(MAX_CONTENT_CHARS);
+  });
+
+  it('does not cut an already-truncated body a second time', () => {
+    const once = truncateContent('あ'.repeat(MAX_CONTENT_CHARS + 500));
+    // 保存された本文を`read_clip`が読み直す経路。ここで再び切られると注記ごと落ちる。
+    expect(truncateContent(once.text)).toEqual({ text: once.text, truncated: false });
+  });
+
+  it('never leaves half of a surrogate pair at the cut', () => {
+    // 切り口が対の境界に落ちるか途中に落ちるかは、先頭が1文字ずれるだけで入れ替わる。
+    // 両方を回さないと、この場合分けを一度も通らないまま緑になる。
+    for (const prefix of ['', 'a']) {
+      const { text } = truncateContent(`${prefix}${'𩸽'.repeat(MAX_CONTENT_CHARS)}`);
+      expect(/\p{Surrogate}/u.test(text)).toBe(false);
+    }
+  });
 });
 
 /**

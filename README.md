@@ -171,3 +171,4 @@ pnpm dry-run
 - [MCP公開境界を専用Workerへ分離し、Access Managed OAuthで保護する](docs/adr/0021-publish-tools-through-mcp-edge.md)
 - [ツール参照をDurable Objectへ90日保持し、BotとMCPで共通化する](docs/adr/0022-persist-tool-refs-in-durable-object.md)
 - [新着一覧をカードと箇条書きに分け、片付けを表示に出す](docs/adr/0023-clip-index-cards-and-dismissed-marks.md)
+- [本文の上限は取得と読み直しで1つにし、保存時の素性を読み直しにも渡す](docs/adr/0026-one-body-limit-for-fetch-and-reread.md)

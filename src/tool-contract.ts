@@ -42,7 +42,7 @@ export const coreToolDescriptions: Record<CoreToolName, string> = {
   find_clips:
     '保存済みクリップを題名・URL・本文から最大5件探し、読取・削除に使うopaqueなclip_refを返す。',
   read_clip:
-    'find_clipsが返したclip_refの現在の本文をGitHubから読む。検索snippetだけを本文の根拠にしない。',
+    'find_clipsが返したclip_refの現在の本文をGitHubから読む。検索snippetだけを本文の根拠にしない。保存時の素性も返す。fetch_completeがfalseなら本文は取り切れていないので、そのつもりで扱う。',
   delete_clip:
     'find_clipsが返したclip_refのクリップ1件をGitHubとD1から削除する。Git履歴から復元できる。',
 };
