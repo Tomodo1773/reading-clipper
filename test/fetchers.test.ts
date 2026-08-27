@@ -402,6 +402,119 @@ describe('loadContent', () => {
     expect(requested.some((url) => url.includes('firecrawl'))).toBe(false);
   });
 
+  function slidePage(...blocks: unknown[]): Response {
+    const scripts = blocks
+      .map((block) => `<script type="application/ld+json">${JSON.stringify(block)}</script>`)
+      .join('\n');
+    return new Response(`<html><head></head><body>スライド${scripts}</body></html>`, {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    });
+  }
+
+  it('builds the Speaker Deck body from the per-slide transcript', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      slidePage(
+        { '@context': 'https://schema.org', '@type': 'WebSite', name: 'Speaker Deck' },
+        {
+          '@context': 'https://schema.org',
+          '@type': 'PresentationDigitalDocument',
+          name: 'いかに伝えるか',
+          description: '発表の説明文。',
+          author: { '@type': 'Person', name: 'Akira Ikeda' },
+          datePublished: '2026-08-27',
+          hasPart: [
+            // 配列の順序ではなく`position`が並び順を持つ。改ページの制御文字も混ざる。
+            { '@type': 'CreativeWork', position: 2, text: '自己紹介\n池田 暁\f' },
+            { '@type': 'CreativeWork', position: 1, text: 'いかに伝えるか\f' },
+            { '@type': 'CreativeWork', position: 3, text: '   ' },
+          ],
+        },
+      ),
+    );
+
+    const result = await fetchContent('https://speakerdeck.com/ikedon/ikani-tsutaeru-ka', makeEnv());
+
+    expect(spy.mock.calls[0]?.[0].toString()).toBe(
+      'https://speakerdeck.com/ikedon/ikani-tsutaeru-ka',
+    );
+    expect(result).toMatchObject({
+      source: 'speakerdeck',
+      canonicalUrl: 'https://speakerdeck.com/ikedon/ikani-tsutaeru-ka',
+      title: 'いかに伝えるか',
+      author: 'Akira Ikeda',
+      publishedAt: '2026-08-27',
+      complete: true,
+    });
+    expect(result.markdown).toBe(
+      [
+        '# いかに伝えるか',
+        '発表の説明文。',
+        '## スライド 1',
+        'いかに伝えるか',
+        '## スライド 2',
+        '自己紹介\n池田 暁',
+        '> この本文はスライドをPDFから機械的に文字起こししたもの。読み順の乱れ、単語の分割、図中の文字の混入がある。元がスライドのため、これ以上の本文は取得できない。',
+      ].join('\n\n'),
+    );
+  });
+
+  it('keeps only the description when a Speaker Deck talk has no transcript', async () => {
+    // 画像だけで作られた発表には文字起こしが無い。
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      slidePage({
+        '@context': 'https://schema.org',
+        '@type': 'PresentationDigitalDocument',
+        name: '写真だけの発表',
+        description: '説明文だけ。',
+      }),
+    );
+
+    const result = await fetchContent('https://speakerdeck.com/alice/photos', makeEnv());
+
+    expect(result.complete).toBe(false);
+    expect(result.markdown).toContain('取得できたのは投稿者が書いた概要だけ');
+    expect(result.markdown).not.toContain('## スライド');
+  });
+
+  it('clips a Docswell slide as description only, never as complete', async () => {
+    // ドクセルはスライドの文字をページにもプレイヤーにも出していない（ADR 0025）。
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      slidePage(
+        {
+          '@context': 'https://schema.org',
+          '@type': 'Article',
+          headline: 'AI 協働力',
+          description: 'Developers Summitのセッション資料です。',
+          author: { '@type': 'Person', name: '1000ch' },
+          datePublished: '2026-08-21',
+        },
+        // パンくずは配列で複数並ぶ。`@type`で選ぶので混ざっていても迷わない。
+        [{ '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [] }],
+      ),
+    );
+
+    const result = await fetchContent(
+      'https://www.docswell.com/s/1000ch/ZN7NJ2-ai-collaboration',
+      makeEnv(),
+    );
+
+    expect(result).toMatchObject({
+      source: 'docswell',
+      title: 'AI 協働力',
+      author: '1000ch',
+      publishedAt: '2026-08-21',
+      complete: false,
+    });
+    expect(result.markdown).toBe(
+      [
+        '# AI 協働力',
+        'Developers Summitのセッション資料です。',
+        '> スライドの文字が公開されていないため、取得できたのは投稿者が書いた概要だけ。スライド本体の中身は含まれない。',
+      ].join('\n\n'),
+    );
+  });
+
   it('rejects a URL that is not HTTP(S) before making any request', async () => {
     const spy = vi.spyOn(globalThis, 'fetch');
 

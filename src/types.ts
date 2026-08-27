@@ -1,7 +1,7 @@
 import type { ThreadAgent } from './thread';
 import type { ToolState } from './tool-state';
 
-export type ClipSource = 'qiita' | 'zenn' | 'x' | 'arxiv' | 'web';
+export type ClipSource = 'qiita' | 'zenn' | 'x' | 'arxiv' | 'speakerdeck' | 'docswell' | 'web';
 
 /**
  * SlackからQueueへ渡す、1通ぶんの会話。

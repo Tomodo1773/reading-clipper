@@ -21,6 +21,9 @@ export function canonicalizeUrl(rawUrl: string): URL {
   if (url.hostname === 'www.qiita.com') url.hostname = 'qiita.com';
   if (url.hostname === 'www.zenn.dev') url.hostname = 'zenn.dev';
   if (url.hostname === 'www.arxiv.org') url.hostname = 'arxiv.org';
+  if (url.hostname === 'www.speakerdeck.com') url.hostname = 'speakerdeck.com';
+  // ドクセルは`www`無しでも200を返すが、自身は`og:url`と構造化データで`www`付きを名乗る。
+  if (url.hostname === 'docswell.com') url.hostname = 'www.docswell.com';
 
   const source = classifyUrl(url);
   if (source !== 'web') {
@@ -44,8 +47,28 @@ export function classifyUrl(url: URL): ClipSource {
   if (url.hostname === 'zenn.dev' && extractZennArticleSlug(url)) return 'zenn';
   if (url.hostname === 'x.com' && extractXPostId(url)) return 'x';
   if (extractArxivId(url)) return 'arxiv';
+  if (url.hostname === 'speakerdeck.com' && isSpeakerdeckTalk(url)) return 'speakerdeck';
+  if (url.hostname === 'www.docswell.com' && DOCSWELL_SLIDE.test(url.pathname)) return 'docswell';
   return 'web';
 }
+
+/**
+ * 発表ページと同じ`/{1}/{2}`の形をした、Speaker Deck自身のページの先頭要素。
+ * カテゴリ（`/c/technology`）、特集（`/p/featured`・`/s/featured`）、機能紹介
+ * （`/features/...`・`/pro/...`）、埋め込みプレイヤー（`/player/{hash}`）が該当する。
+ * ユーザー名にこれらは使えないため、除外しても発表ページを取りこぼさない。
+ */
+const SPEAKERDECK_RESERVED = new Set(['c', 'p', 's', 'features', 'pro', 'player']);
+
+/** `speakerdeck.com/{ユーザー}/{発表}`。ユーザーのページ（1要素）は発表ではない。 */
+function isSpeakerdeckTalk(url: URL): boolean {
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length !== 2) return false;
+  return !SPEAKERDECK_RESERVED.has(segments[0] ?? '');
+}
+
+/** `www.docswell.com/s/{ユーザー}/{キー}-{スラッグ}`。 */
+const DOCSWELL_SLIDE = /^\/s\/[^/]+\/[^/]+\/?$/;
 
 /** 新形式（`2608.18300`）。 */
 const ARXIV_NEW_ID = /^\d{4}\.\d{4,5}$/;

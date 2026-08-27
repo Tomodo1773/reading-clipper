@@ -31,7 +31,7 @@ const MAX_CONTENT_CHARS = 200_000;
  * 各フェッチャーが知っていること。**どのURLの記事かは含めない。**
  *
  * クリップの識別（保存先パス・`source_url`・D1の`url`）は`canonicalUrl`から決まる。
- * それを4つのフェッチャーがそれぞれ組み立てると、どれか1つがずれたときに黙って壊れる。
+ * それを各フェッチャーがそれぞれ組み立てると、どれか1つがずれたときに黙って壊れる。
  * 取り方を選んだ`fetchContent`が1箇所で決める（ADR 0012）。
  */
 type FetchedBody = Omit<FetchedContent, 'canonicalUrl' | 'imageUrl'>;
@@ -264,7 +264,11 @@ function arxivAbstract(nodes: HtmlNode[]): string | undefined {
   return text || undefined;
 }
 
-async function fetchArxivPage(pageUrl: string): Promise<string> {
+/**
+ * 記事ページのHTMLをまるごと取る。`<head>`だけで足りる`fetchPageHead`とは別物で、
+ * こちらは本文や構造化データが`<body>`側にあるフェッチャーが使う。
+ */
+async function fetchPageHtml(pageUrl: string): Promise<string> {
   const response = await fetchWithTimeout(
     pageUrl,
     { headers: { accept: 'text/html' } },
@@ -287,7 +291,7 @@ async function fetchArxiv(url: URL): Promise<FetchedBody> {
   if (!id) throw new ClipError('arXiv paper id was not found', 'validation', false);
 
   const absUrl = `https://arxiv.org/abs/${id}`;
-  const absHtml = await fetchArxivPage(absUrl);
+  const absHtml = await fetchPageHtml(absUrl);
   const absNodes = parseHtml(absHtml);
 
   const meta = readMetaTags(absHtml);
@@ -312,7 +316,7 @@ async function fetchArxiv(url: URL): Promise<FetchedBody> {
     return finalize({ ...common, markdown: abstract, complete: false });
   }
 
-  const paperHtml = await fetchArxivPage(htmlUrl);
+  const paperHtml = await fetchPageHtml(htmlUrl);
   // 左のTOCサイドバーには本文と同じ文字列が並ぶため、テキストではなく構造で本文を選ぶ。
   const document = findDescendant(parseHtml(paperHtml), (node) =>
     classList(node).includes('ltx_document'),
@@ -325,6 +329,119 @@ async function fetchArxiv(url: URL): Promise<FetchedBody> {
     // 図の`src`が相対パスで来るため、取得したページのURLで解決する。
     markdown: createHtmlToMarkdown({ baseUrl: htmlUrl, rules: arxivRules })(document.children),
     complete: true,
+  });
+}
+
+// スライド共有サイトは、記事と違って本文のHTMLを持たない。どちらも公開しているのは
+// 発表ページに埋め込まれた構造化データ（schema.org）で、そこから取れる範囲がサイトで
+// はっきり違う。Speaker Deckはスライド1枚ずつの文字起こしまで載せ、ドクセルは投稿者が
+// 書いた概要までしか載せない。
+//
+// 取れた範囲は本文の末尾に一言で書き残す。フロントマターの`fetch_complete`は「末尾が
+// 省略されている」の意味なので、スライドの事情はそこでは表せない。後から読んだAIに
+// 「これはスライドなので本文はあてにならない」と分かることの方が大事で、それは
+// 本文に書くのが一番確実に届く（ADR 0025）。
+
+/**
+ * `<script type="application/ld+json">`から、`@type`が一致する最初のものを返す。
+ *
+ * 1ページに複数のブロックが並び、1つのブロックが配列のこともある（ドクセルはパンくずを
+ * 配列で2本並べる）。JSONとして壊れているブロックは飛ばし、読めたものだけを見る。
+ */
+function findJsonLd(html: string, type: string): Record<string, unknown> | undefined {
+  const blocks = html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script\s*>/gi,
+  );
+  for (const block of blocks) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(block[1] ?? '');
+    } catch {
+      continue;
+    }
+    for (const node of Array.isArray(parsed) ? parsed : [parsed]) {
+      const record = asRecord(node);
+      if (record?.['@type'] === type) return record;
+    }
+  }
+  return undefined;
+}
+
+const SLIDE_TRANSCRIPT_NOTE =
+  '> この本文はスライドをPDFから機械的に文字起こししたもの。読み順の乱れ、単語の分割、図中の文字の混入がある。元がスライドのため、これ以上の本文は取得できない。';
+
+const SLIDE_DESCRIPTION_ONLY_NOTE =
+  '> スライドの文字が公開されていないため、取得できたのは投稿者が書いた概要だけ。スライド本体の中身は含まれない。';
+
+/**
+ * Speaker Deckは発表ページの構造化データ（`PresentationDigitalDocument`）に、題名・著者・
+ * 公開日・説明文と、**スライド1枚ずつの文字起こし**（`hasPart`）を載せている。ページを
+ * 1回取れば足りる。
+ *
+ * 文字起こしはPDFから機械的に抜いた文字で、整形はしない。読み順を直すには元のレイアウトが
+ * 要るが、それは公開されていない。推測で組み替えると、元より読めない本文になる。
+ *
+ * 画像だけで作られた発表には文字起こしが無い。そのときは説明文だけが残る。
+ */
+async function fetchSpeakerdeck(url: URL): Promise<FetchedBody> {
+  const html = await fetchPageHtml(url.toString());
+  const deck = findJsonLd(html, 'PresentationDigitalDocument');
+  const title = stringField(deck, 'name');
+  if (!deck || !title) throw new ClipError('Speaker Deck page had no deck metadata', 'fetch', false);
+
+  const slides = (Array.isArray(deck.hasPart) ? deck.hasPart : [])
+    .map((part, index) => {
+      const slide = asRecord(part);
+      return {
+        // 何枚目かはSpeaker Deck自身が`position`で書いている。並んでいた順ではなくそちらに従う。
+        // 書かれていなければ、並んでいた位置がそのまま最良の手掛かりになる。
+        position: typeof slide?.position === 'number' ? slide.position : index,
+        // スライドの区切りに改ページの制御文字が入っている。
+        text: (stringField(slide, 'text') ?? '').replace(/\f/g, '').trim(),
+      };
+    })
+    .filter((slide) => slide.text)
+    .sort((left, right) => left.position - right.position);
+
+  const sections = [`# ${title}`, stringField(deck, 'description')];
+  for (const [index, slide] of slides.entries()) {
+    sections.push(`## スライド ${index + 1}`, slide.text);
+  }
+  sections.push(slides.length > 0 ? SLIDE_TRANSCRIPT_NOTE : SLIDE_DESCRIPTION_ONLY_NOTE);
+
+  return finalize({
+    source: 'speakerdeck',
+    title,
+    author: stringField(asRecord(deck.author), 'name'),
+    publishedAt: stringField(deck, 'datePublished'),
+    markdown: sections.filter(Boolean).join('\n\n'),
+    complete: slides.length > 0,
+  });
+}
+
+/**
+ * ドクセルはスライドの文字をどこにも出していない。発表ページのHTMLにも、埋め込み
+ * プレイヤーが読むデータにも入っておらず（プレイヤーが持つのはページ数とリンクの座標
+ * だけ）、PDFのダウンロード経路はrobots.txtで拒否されている。
+ *
+ * 取れるのは構造化データ（`Article`）の題名・著者・公開日と、投稿者が書いた概要まで。
+ * **本文は常に概要止まりなので`complete`は立てない**（ADR 0025）。
+ */
+async function fetchDocswell(url: URL): Promise<FetchedBody> {
+  const html = await fetchPageHtml(url.toString());
+  const slide = findJsonLd(html, 'Article');
+  const title = stringField(slide, 'headline');
+  if (!slide || !title) throw new ClipError('Docswell page had no slide metadata', 'fetch', false);
+
+  return finalize({
+    source: 'docswell',
+    title,
+    author: stringField(asRecord(slide.author), 'name'),
+    publishedAt: stringField(slide, 'datePublished'),
+    markdown: [`# ${title}`, stringField(slide, 'description'), SLIDE_DESCRIPTION_ONLY_NOTE]
+      .filter(Boolean)
+      .join('\n\n'),
+    complete: false,
   });
 }
 
@@ -460,6 +577,10 @@ function fetchBody(url: URL, env: Env): Promise<FetchedBody> {
       return fetchX(url, env);
     case 'arxiv':
       return fetchArxiv(url);
+    case 'speakerdeck':
+      return fetchSpeakerdeck(url);
+    case 'docswell':
+      return fetchDocswell(url);
     case 'web':
       return fetchWeb(url, env);
   }

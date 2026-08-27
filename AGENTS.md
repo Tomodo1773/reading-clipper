@@ -24,7 +24,7 @@
 | `src/core-rpc.ts` / `src/mcp-edge.ts` | Service Binding RPCと公開`/mcp`境界 |
 | `src/tool-state.ts` / `src/retention.ts` | owner単位のopaque refと90日Alarm cleanup |
 | `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
-| `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / arXiv / Firecrawl）。サイト固有の変換ルールもここに置きます |
+| `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / arXiv / Speaker Deck / ドクセル / Firecrawl）。サイト固有の変換ルールもここに置きます |
 | `src/html-markdown.ts` | 意味づけの残るHTMLをMarkdownへ戻す共有の変換器。**特定のサイトを知りません**。サイト固有の要素は呼び出し側からルールとして渡します |
 | `src/url.ts` | canonical化、種別判定、保存先パスの決定 |
 | `src/github.ts` | GitHub App認証、Code SearchとContents API |
