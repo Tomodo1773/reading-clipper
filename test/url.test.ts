@@ -78,6 +78,43 @@ describe('URL handling', () => {
     }
   });
 
+  it('treats only Speaker Deck talk pages as a slide source', () => {
+    const talk = canonicalizeUrl('https://www.speakerdeck.com/alice/my-talk/?utm_source=s');
+    expect(talk.toString()).toBe('https://speakerdeck.com/alice/my-talk');
+    expect(classifyUrl(talk)).toBe('speakerdeck');
+
+    for (const raw of [
+      // 発表ページと同じ`/{1}/{2}`の形をした、Speaker Deck自身のページ。
+      'https://speakerdeck.com/c/technology',
+      'https://speakerdeck.com/p/featured',
+      'https://speakerdeck.com/s/featured',
+      'https://speakerdeck.com/features/slide-notes',
+      'https://speakerdeck.com/pro/storyboard-artists',
+      'https://speakerdeck.com/player/95a650e6159848709be4289c31bbf5f2',
+      // ユーザーのページは発表ではない。
+      'https://speakerdeck.com/alice',
+      'https://speakerdeck.com/alice/my-talk/extra',
+    ]) {
+      expect(classifyUrl(canonicalizeUrl(raw))).toBe('web');
+    }
+  });
+
+  it('treats only Docswell slide pages as a slide source', () => {
+    // `www`無しでも開けるが、ドクセル自身は`og:url`と構造化データで`www`付きを名乗る。
+    const slide = canonicalizeUrl('http://docswell.com/s/alice/ZN7NJ2-my-slide/?utm_source=s');
+    expect(slide.toString()).toBe('https://www.docswell.com/s/alice/ZN7NJ2-my-slide');
+    expect(classifyUrl(slide)).toBe('docswell');
+
+    for (const raw of [
+      'https://www.docswell.com/user/alice',
+      'https://www.docswell.com/category/programming',
+      'https://www.docswell.com/s/alice',
+      'https://www.docswell.com/slide/ZN7NJ2/embed',
+    ]) {
+      expect(classifyUrl(canonicalizeUrl(raw))).toBe('web');
+    }
+  });
+
   it('names the file after the article title, flat under clips/', () => {
     expect(buildClipPath('Cloudflare Workersの設計')).toBe('clips/Cloudflare-Workersの設計.md');
     // 日本語も大文字小文字もそのまま残す。ローマ字化や小文字化はしない。

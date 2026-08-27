@@ -21,8 +21,9 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
 - **Slackからすぐにクリップ**
   スマートフォンのアプリやブラウザの共有メニューから、URLをSlack AppのDMへ送るだけで受け付ける。
 - **URLに応じた本文取得**
-  Qiita、Zenn、Xの公開Post、arXivの論文、一般のWebページをそれぞれに適した方法で取得。リダイレクトURLにも対応。
+  Qiita、Zenn、Xの公開Post、arXivの論文、Speaker Deckとドクセルのスライド、一般のWebページをそれぞれに適した方法で取得。リダイレクトURLにも対応。
   arXivは入口のページではなくLaTeXML版の全文HTMLから取るため、アブストラクトではなく論文の中身が残る。
+  スライドは本文のHTMLを持たないため、公開されているテキストの範囲でクリップする。Speaker Deckは1枚ずつの文字起こしまで、ドクセルは投稿者の概要までが上限で、**どこまで取れたかは本文の末尾に書き残す**（[ADR 0025](docs/adr/0025-slides-clipped-within-published-text.md)）。
 - **紹介投稿から本命の記事を保存**
   Xの短い投稿がブログ記事を紹介している場合、AIが投稿本文を読んだうえでリンク先も取得し、紹介投稿ではなく記事本体をクリップする。
 - **要約とスレッド内の質問応答**
@@ -87,7 +88,7 @@ MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、
 | 会話・tool状態 | Cloudflare Durable Objects | Slackスレッド単位の会話履歴、owner単位のopaque ref、90日Alarm cleanup |
 | ダイジェスト状態 | Cloudflare D1 / Cron Triggers | 片付け状態、再掲履歴、週次実行 |
 | AI | Vercel AI SDK / Gemini / Cloudflare AI Gateway | 要約、質問応答、保存対象の判断 |
-| 本文取得 | Qiita Markdown / Zenn API / X API / arXiv LaTeXML HTML / Firecrawl | URLごとの本文取得 |
+| 本文取得 | Qiita Markdown / Zenn API / X API / arXiv LaTeXML HTML / Speaker Deck・ドクセルの構造化データ / Firecrawl | URLごとの本文取得 |
 | 保存 | GitHub App / Contents API | privateリポジトリへのMarkdown保存 |
 | テスト | Vitest / Cloudflare Workers test pool | Worker環境でのユニットテスト |
 
