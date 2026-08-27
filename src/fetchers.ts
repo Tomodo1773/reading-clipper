@@ -25,7 +25,32 @@ import {
 } from './url';
 import { asRecord, assertOk, fetchWithTimeout, stringField } from './utils';
 
-const MAX_CONTENT_CHARS = 200_000;
+/**
+ * 1件のクリップの本文が持てる上限。保存するMarkdownと、会話へ入る本文の両方に効く。
+ *
+ * 本文はモデルの応答と一緒にスレッドの会話履歴へ残り（ADR 0007）、以降のターンでも
+ * 丸ごと送り直される。つまり効いてくるのは「1回の取得の大きさ」ではなく「1件の記事が
+ * 会話へ持ち込む量」なので、取ったときと読み直したときで違う値を持たない（ADR 0026）。
+ */
+export const MAX_CONTENT_CHARS = 200_000;
+
+const TRUNCATION_NOTE = `> 本文は${MAX_CONTENT_CHARS.toLocaleString('en-US')}文字で省略した。`;
+
+/**
+ * 上限を超えた本文を切り、切ったことを末尾に書き残す。上限内ならそのまま返す。
+ *
+ * 黙って切ると、読む側にはそこで記事が終わっているようにしか見えない。
+ *
+ * 注記まで含めて上限に収めるので、**結果は必ず上限以下**になる。この不変条件があるため、
+ * 保存済みのクリップを読み直しても二重に切られない（ADR 0026）。
+ */
+export function truncateContent(text: string): { text: string; truncated: boolean } {
+  if (text.length <= MAX_CONTENT_CHARS) return { text, truncated: false };
+  let head = text.slice(0, MAX_CONTENT_CHARS - TRUNCATION_NOTE.length - '\n\n'.length);
+  // 切り口がサロゲートペアの途中だと、壊れた文字が末尾に残る。
+  if (/\p{Surrogate}$/u.test(head)) head = head.slice(0, -1);
+  return { text: `${head.trimEnd()}\n\n${TRUNCATION_NOTE}`, truncated: true };
+}
 
 /**
  * 各フェッチャーが知っていること。**どのURLの記事かは含めない。**
@@ -45,16 +70,8 @@ function finalize(content: FetchedBody): FetchedBody {
   if (!normalized) {
     throw new ClipError('fetched content was empty', 'fetch', false);
   }
-  if (normalized.length <= MAX_CONTENT_CHARS) {
-    return { ...content, markdown: normalized };
-  }
-  let truncated = normalized.slice(0, MAX_CONTENT_CHARS);
-  if (/\p{Surrogate}$/u.test(truncated)) truncated = truncated.slice(0, -1);
-  return {
-    ...content,
-    complete: false,
-    markdown: `${truncated.trimEnd()}\n\n> 取得内容は${MAX_CONTENT_CHARS.toLocaleString('en-US')}文字で省略した。`,
-  };
+  const { text, truncated } = truncateContent(normalized);
+  return { ...content, markdown: text, complete: truncated ? false : content.complete };
 }
 
 /**

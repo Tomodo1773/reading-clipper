@@ -730,8 +730,10 @@ describe('reading a saved clip', () => {
     const markdown = [
       '---',
       'source_url: "https://example.com/knowledge-graph"',
+      'source_type: "web"',
       'title: "知識グラフ"',
       'clipped_at: "2026-08-20T00:00:00.000Z"',
+      'fetch_complete: false',
       '---',
       '',
       'オントロジーを使って概念間の関係を表現する。',
@@ -790,13 +792,16 @@ describe('reading a saved clip', () => {
         },
       ],
     });
+    // 保存時の素性もそのまま渡す。取り切れていない本文を「全文」として扱わせないため、
+    // `fetch_complete`は読み直したAIにも届く必要がある（ADR 0026）。
     expect(toolOutput(turn.appended, 'read_clip')).toEqual({
       found: true,
       clip_ref: CLIP_REF_1,
       path,
       title: '知識グラフ',
       url: 'https://example.com/knowledge-graph',
-      complete: true,
+      source: 'web',
+      fetch_complete: false,
       body: 'オントロジーを使って概念間の関係を表現する。',
     });
     expect(contentGets).toBe(1);

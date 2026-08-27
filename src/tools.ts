@@ -13,7 +13,7 @@ import {
 import { applyClipDismissal } from './dismiss';
 import { asClipError, type ProcessingStage } from './errors';
 import { clipExcerpt } from './excerpt';
-import { loadContent } from './fetchers';
+import { loadContent, truncateContent } from './fetchers';
 import { parseClipFrontMatter } from './front-matter';
 import {
   deleteGitHubFile,
@@ -50,7 +50,15 @@ function toolFailure(
   return clipError.stage;
 }
 
-const MAX_READ_CHARS = 60_000;
+/**
+ * フロントマターの真偽値を読む。GitHub上へ手で置かれたファイルなど、書かれていないこともある。
+ * 「false」と「書かれていない」を混ぜないため、`undefined`を潰さない。
+ */
+function frontMatterFlag(value: string | undefined): boolean | undefined {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
 
 interface SearchClip extends ClipRow {
   dismissed: boolean | null;
@@ -198,16 +206,18 @@ export async function readClipTool(env: Env, ownerId: string, rawArgs: unknown) 
       return { found: false, missing: true, clip_ref: ref };
     }
     const { fields, body } = parseClipFrontMatter(file.content);
-    const text = body.trim();
-    const complete = text.length <= MAX_READ_CHARS;
     return {
       found: true,
       clip_ref: ref,
       path: clip.path,
       title: fields.title,
       url: fields.source_url,
-      complete,
-      body: complete ? text : text.slice(0, MAX_READ_CHARS),
+      // 取得時の素性はフロントマターにしか残らない。ここで捨てると、後から読んだAIには
+      // 「どこから取ったものか」「全文が取れているのか」が分からない（ADR 0026）。
+      source: fields.source_type,
+      fetch_complete: frontMatterFlag(fields.fetch_complete),
+      // 上限を超えたことは`truncateContent`が本文の末尾へ書く。別に旗を立てない。
+      body: truncateContent(body.trim()).text,
     };
   } catch (error) {
     return {

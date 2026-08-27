@@ -4,6 +4,8 @@
 - 日付: 2026-08-23
 
 > 更新: GitHubを検索・読取の正本にする判断は維持する。`read_clip`が受けるrefの保持範囲は[ADR 0022](0022-persist-tool-refs-in-durable-object.md)で変更し、ターンを越えて90日使えるopaque refにする。
+>
+> 更新: `read_clip`の1回60,000文字という上限と、返り値の`complete`は[ADR 0026](0026-one-body-limit-for-fetch-and-reread.md)で変更する。上限は取得時と同じ200,000文字に統一し、フロントマターを捨てずに保存時の素性も返す。
 
 ## 背景
 
