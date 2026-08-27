@@ -1,8 +1,28 @@
 import { ClipError, isRetryableStatus } from './errors';
 import { splitFrontMatter } from './front-matter';
-import { decodeEntities, findOgImage, parseAttributes } from './html';
+import { findOgImage, readMetaTags } from './html';
+import {
+  classList,
+  codeBlock,
+  collectDescendants,
+  createHtmlToMarkdown,
+  findDescendant,
+  type HtmlElement,
+  type HtmlNode,
+  math,
+  parseHtml,
+  prefixLines,
+  type RenderRules,
+  textContent,
+} from './html-markdown';
 import type { Env, FetchedContent } from './types';
-import { canonicalizeUrl, classifyUrl, extractXPostId, extractZennArticleSlug } from './url';
+import {
+  canonicalizeUrl,
+  classifyUrl,
+  extractArxivId,
+  extractXPostId,
+  extractZennArticleSlug,
+} from './url';
 import { asRecord, assertOk, fetchWithTimeout, stringField } from './utils';
 
 const MAX_CONTENT_CHARS = 200_000;
@@ -57,286 +77,46 @@ async function fetchQiita(url: URL): Promise<FetchedBody> {
 }
 
 // Zennは記事のMarkdown原稿を公開していない。取得できるのはzenn-markdown-htmlが生成した
-// 意味づけの残るHTMLだけなので、その範囲をMarkdownへ戻す小さな変換器を持つ。
-type HtmlNode = string | HtmlElement;
-
-interface HtmlElement {
-  tag: string;
-  attrs: Record<string, string>;
-  children: HtmlNode[];
-}
-
-const VOID_TAGS = new Set([
-  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source',
-  'track', 'wbr',
-]);
-
-const BLOCK_TAGS = new Set([
-  'address', 'article', 'aside', 'blockquote', 'details', 'div', 'dl', 'figure', 'figcaption',
-  'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'main', 'nav', 'ol', 'p', 'pre',
-  'section', 'table', 'ul',
-]);
-
-const TAG_PATTERN =
-  /<!--[\s\S]*?-->|<\/([a-zA-Z][\w:-]*)[^>]*>|<([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
-
-function parseHtml(html: string): HtmlNode[] {
-  const root: HtmlElement = { tag: '#root', attrs: {}, children: [] };
-  const stack: HtmlElement[] = [root];
-  let cursor = 0;
-  const top = (): HtmlElement => stack[stack.length - 1] ?? root;
-  for (const match of html.matchAll(TAG_PATTERN)) {
-    const start = match.index ?? 0;
-    if (start > cursor) top().children.push(decodeEntities(html.slice(cursor, start)));
-    cursor = start + match[0].length;
-    const closing = match[1]?.toLowerCase();
-    if (closing) {
-      for (let depth = stack.length - 1; depth > 0; depth -= 1) {
-        if (stack[depth]?.tag !== closing) continue;
-        stack.length = depth;
-        break;
-      }
-      continue;
-    }
-    const tag = match[2]?.toLowerCase();
-    if (!tag) continue;
-    const element: HtmlElement = { tag, attrs: parseAttributes(match[3] ?? ''), children: [] };
-    top().children.push(element);
-    if (!VOID_TAGS.has(tag)) stack.push(element);
-  }
-  if (cursor < html.length) top().children.push(decodeEntities(html.slice(cursor)));
-  return root.children;
-}
-
-function isElement(node: HtmlNode): node is HtmlElement {
-  return typeof node !== 'string';
-}
-
-function classList(element: HtmlElement): string[] {
-  return (element.attrs.class ?? '').split(/\s+/).filter(Boolean);
-}
-
-function findDescendant(
-  nodes: HtmlNode[],
-  predicate: (element: HtmlElement) => boolean,
-): HtmlElement | undefined {
-  for (const node of nodes) {
-    if (!isElement(node)) continue;
-    if (predicate(node)) return node;
-    const nested = findDescendant(node.children, predicate);
-    if (nested) return nested;
-  }
-  return undefined;
-}
-
-function collectDescendants(
-  nodes: HtmlNode[],
-  predicate: (element: HtmlElement) => boolean,
-): HtmlElement[] {
-  const found: HtmlElement[] = [];
-  for (const node of nodes) {
-    if (!isElement(node)) continue;
-    if (predicate(node)) found.push(node);
-    else found.push(...collectDescendants(node.children, predicate));
-  }
-  return found;
-}
-
-function textContent(nodes: HtmlNode[]): string {
-  return nodes.map((node) => (isElement(node) ? textContent(node.children) : node)).join('');
-}
-
-function codeSpan(value: string): string {
-  const text = value.replace(/\r?\n/g, ' ');
-  const longest = (text.match(/`+/g) ?? []).reduce((length, run) => Math.max(length, run.length), 0);
-  const fence = '`'.repeat(longest + 1);
-  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-  return `${fence}${pad}${text}${pad}${fence}`;
-}
-
-function wrapInline(nodes: HtmlNode[], marker: string): string {
-  const inner = renderInline(nodes);
-  const trimmed = inner.trim();
-  if (!trimmed) return inner;
-  const leading = inner.slice(0, inner.length - inner.trimStart().length);
-  const trailing = inner.slice(inner.trimEnd().length);
-  return `${leading}${marker}${trimmed}${marker}${trailing}`;
-}
-
-function renderInline(nodes: HtmlNode[]): string {
-  return nodes
-    .map((node) => {
-      if (!isElement(node)) return node.replace(/\s+/g, ' ');
-      switch (node.tag) {
-        case 'br':
-          return '\n';
-        case 'img': {
-          const src = node.attrs.src;
-          return src ? `![${node.attrs.alt ?? ''}](${src})` : '';
-        }
-        case 'a': {
-          const text = renderInline(node.children).trim();
-          const href = node.attrs.href;
-          if (!text) return '';
-          return href && !href.startsWith('#') ? `[${text}](${href})` : text;
-        }
-        case 'code':
-          return codeSpan(textContent(node.children));
-        case 'strong':
-        case 'b':
-          return wrapInline(node.children, '**');
-        case 'em':
-        case 'i':
-          return wrapInline(node.children, '*');
-        case 'del':
-        case 's':
-        case 'strike':
-          return wrapInline(node.children, '~~');
-        case 'iframe':
-        case 'script':
-        case 'style':
-        case 'button':
-          return '';
-        case 'embed-katex': {
-          const tex = textContent(node.children).trim();
-          if (!tex) return '';
-          return node.attrs['display-mode'] ? `$$\n${tex}\n$$` : `$${tex}$`;
-        }
-        default:
-          return renderInline(node.children);
-      }
-    })
-    .join('');
-}
-
-/** `<br>` の前後に残るHTML由来の空白を落として、Markdownの改行として読めるようにする。 */
-function renderParagraph(nodes: HtmlNode[]): string {
-  return renderInline(nodes).replace(/[ \t]*\n[ \t]*/g, '\n').trim();
-}
-
-function prefixLines(value: string, prefix: string): string {
-  return value
-    .split('\n')
-    .map((line) => (line ? `${prefix}${line}` : prefix.trimEnd()))
-    .join('\n');
-}
-
-function renderCodeBlock(pre: HtmlElement, filename?: string): string {
-  const code = textContent(pre.children).replace(/\n+$/, '');
-  const fenceLength = (code.match(/^`{3,}/gm) ?? []).reduce(
-    (length, run) => Math.max(length, run.length + 1),
-    3,
-  );
-  const fence = '`'.repeat(fenceLength);
-  const language = filename?.match(/\.([A-Za-z0-9]+)$/)?.[1]?.toLowerCase() ?? '';
-  const header = filename ? `\`${filename}\`\n\n` : '';
-  return `${header}${fence}${language}\n${code}\n${fence}`;
-}
-
-function renderList(element: HtmlElement, ordered: boolean): string {
-  const items = element.children.filter(isElement).filter((child) => child.tag === 'li');
-  return items
-    .map((item, position) => {
-      const marker = ordered ? `${position + 1}. ` : '- ';
-      const indent = ' '.repeat(marker.length);
-      // 入れ子のリストは段落扱いにせず、親の項目に続けてぶら下げる。
-      const body = renderBlocks(item.children).replace(/\n\n(?=(?:- |\d+\. ))/g, '\n');
-      const [first = '', ...rest] = body.split('\n');
-      return [`${marker}${first}`, ...rest.map((line) => (line ? `${indent}${line}` : ''))].join('\n');
-    })
-    .join('\n');
-}
-
-function renderTable(element: HtmlElement): string {
-  const rows = collectDescendants(element.children, (node) => node.tag === 'tr').map((row) =>
-    row.children
-      .filter(isElement)
-      .filter((cell) => cell.tag === 'th' || cell.tag === 'td')
-      .map((cell) => renderInline(cell.children).replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|').trim()),
-  );
-  const [header, ...body] = rows;
-  if (!header?.length) return '';
-  const line = (values: string[]): string => `| ${values.join(' | ')} |`;
-  return [line(header), line(header.map(() => '---')), ...body.map(line)].join('\n');
-}
-
-function renderBlock(element: HtmlElement): string {
-  switch (element.tag) {
-    case 'h1':
-    case 'h2':
-    case 'h3':
-    case 'h4':
-    case 'h5':
-    case 'h6': {
-      const text = renderInline(element.children).replace(/\s+/g, ' ').trim();
-      return text ? `${'#'.repeat(Number(element.tag.slice(1)))} ${text}` : '';
-    }
-    case 'p':
-      return renderParagraph(element.children);
-    case 'hr':
-      return '---';
-    case 'pre':
-      return renderCodeBlock(element);
-    case 'ul':
-      return renderList(element, false);
-    case 'ol':
-      return renderList(element, true);
-    case 'table':
-      return renderTable(element);
-    case 'blockquote':
-      return prefixLines(renderBlocks(element.children), '> ');
-    case 'aside': {
+// 意味づけの残るHTMLだけなので、その範囲をMarkdownへ戻す（ADR 0003）。
+//
+// 変換そのものは`html-markdown.ts`の共有の変換器が行う。ここに置くのは、zenn-markdown-html
+// でしか意味を持たない要素だけである。
+const renderZenn = createHtmlToMarkdown({
+  rules: {
+    inline: (element) => {
+      if (element.tag !== 'embed-katex') return undefined;
+      const tex = textContent(element.children).trim();
+      if (!tex) return '';
+      return math(tex, Boolean(element.attrs['display-mode']));
+    },
+    block: (element, { renderBlocks }) => {
       // Zennの`:::message`。記号を表す`span.msg-symbol`は捨て、本文だけ引用にする。
-      const content = findDescendant(element.children, (node) =>
-        classList(node).includes('msg-content'),
-      );
-      const body = renderBlocks(content?.children ?? element.children);
-      return body ? prefixLines(body, '> ') : '';
-    }
-    case 'details': {
-      const summary = element.children.filter(isElement).find((node) => node.tag === 'summary');
-      const title = summary ? renderInline(summary.children).trim() : '';
-      const body = renderBlocks(element.children.filter((node) => node !== summary));
-      return [title ? `**${title}**` : '', body].filter(Boolean).join('\n\n');
-    }
-    case 'div': {
-      if (classList(element).includes('code-block-container')) {
+      if (element.tag === 'aside') {
+        const content = findDescendant(element.children, (node) =>
+          classList(node).includes('msg-content'),
+        );
+        const body = renderBlocks(content?.children ?? element.children);
+        return body ? prefixLines(body, '> ') : '';
+      }
+      if (element.tag === 'div' && classList(element).includes('code-block-container')) {
         const pre = findDescendant(element.children, (node) => node.tag === 'pre');
         const filename = findDescendant(element.children, (node) =>
           classList(node).includes('code-block-filename'),
         );
-        if (pre) return renderCodeBlock(pre, textContent(filename?.children ?? []).trim() || undefined);
+        if (pre) {
+          return codeBlock(
+            textContent(pre.children),
+            textContent(filename?.children ?? []).trim() || undefined,
+          );
+        }
       }
-      return renderBlocks(element.children);
-    }
-    default:
-      return renderBlocks(element.children);
-  }
-}
-
-function renderBlocks(nodes: HtmlNode[]): string {
-  const blocks: string[] = [];
-  let inline: HtmlNode[] = [];
-  const flushInline = (): void => {
-    const text = renderParagraph(inline);
-    inline = [];
-    if (text) blocks.push(text);
-  };
-  for (const node of nodes) {
-    if (!isElement(node) || !BLOCK_TAGS.has(node.tag)) {
-      inline.push(node);
-      continue;
-    }
-    flushInline();
-    const block = renderBlock(node).trim();
-    if (block) blocks.push(block);
-  }
-  flushInline();
-  return blocks.join('\n\n');
-}
+      return undefined;
+    },
+  },
+});
 
 function zennHtmlToMarkdown(html: string): string {
-  return renderBlocks(parseHtml(html)).trim();
+  return renderZenn(parseHtml(html));
 }
 
 async function fetchZenn(url: URL): Promise<FetchedBody> {
@@ -427,6 +207,123 @@ async function fetchX(url: URL, env: Env): Promise<FetchedBody> {
     author: username ? `@${username}` : displayName,
     publishedAt: stringField(data, 'created_at'),
     markdown,
+    complete: true,
+  });
+}
+
+// arXivはLaTeXMLが生成した全文HTMLを配っている（ADR 0024）。absページは論文の入口で
+// 本文を1文字も含まないため、そちらを取るとアブストラクトだけが保存される。
+//
+// 変換そのものは`html-markdown.ts`の共有の変換器が行う。ここに置くのは、LaTeXMLの出力で
+// しか意味を持たない要素だけである。
+/**
+ * タイトルと抄録の間に並ぶ書誌の飾り。どれも論文の中身ではなく、フロントマターか
+ * 元ページで足りる。落とさないと、どの論文もここから始まり、ダイジェストの抜粋
+ * （ADR 0011）も抄録へ届かずにここで埋まる。
+ */
+const ARXIV_FRONT_MATTER = new Set([
+  // 著者の所属とメールアドレスが1,500字ほど。名前はフロントマターへ`citation_author`から入る。
+  'ltx_authors',
+  // ACMのCCS分類。分類語が100字ほど、抄録の手前に居座る。
+  'ltx_pubnotes',
+]);
+
+function isArxivFrontMatter(element: HtmlElement): boolean {
+  return classList(element).some((name) => ARXIV_FRONT_MATTER.has(name));
+}
+
+const arxivRules: RenderRules = {
+  inline: (element) => {
+    if (isArxivFrontMatter(element)) return '';
+    // LaTeX原文が`alttext`に入っている。既定の経路へ落とすとMathMLの中身とTeX注釈が二重に出る。
+    if (element.tag !== 'math') return undefined;
+    const tex = element.attrs.alttext?.trim();
+    if (!tex) return '';
+    return math(tex, element.attrs.display === 'block');
+  },
+  block: (element, { renderInline }) => {
+    if (isArxivFrontMatter(element)) return '';
+    // アルゴリズムの擬似コード。`<pre>`ではなく行ごとの`div`なので、放置すると1行ずつ段落へ割れる。
+    if (element.tag !== 'div' || !classList(element).includes('ltx_listing')) return undefined;
+    const code = collectDescendants(element.children, (node) =>
+      classList(node).includes('ltx_listingline'),
+    )
+      .map((line) => renderInline(line.children).replace(/\s+/g, ' ').trim())
+      .join('\n');
+    return code ? codeBlock(code) : '';
+  },
+};
+
+/** absページの`Abstract:`という飾りを落とす。全文HTMLが無い論文で本文の代わりに使う。 */
+function arxivAbstract(nodes: HtmlNode[]): string | undefined {
+  const blockquote = findDescendant(
+    nodes,
+    (node) => node.tag === 'blockquote' && classList(node).includes('abstract'),
+  );
+  const text = textContent(blockquote?.children ?? []).replace(/^\s*Abstract:\s*/i, '').trim();
+  return text || undefined;
+}
+
+async function fetchArxivPage(pageUrl: string): Promise<string> {
+  const response = await fetchWithTimeout(
+    pageUrl,
+    { headers: { accept: 'text/html' } },
+    30_000,
+    'fetch',
+  );
+  assertOk(response, 'fetch');
+  return response.text();
+}
+
+/**
+ * absページを起点にする。ここには整ったメタデータ（`citation_*`）と、全文HTMLへの
+ * **版まで確定したリンク**の両方があるため、在庫の有無を404で確かめる必要がなく、
+ * 2回のリクエストの間に改版が入っても版を取り違えない。
+ *
+ * 著者を全文HTML側から取らないのは、そこには所属とメールアドレスが混ざるためである。
+ */
+async function fetchArxiv(url: URL): Promise<FetchedBody> {
+  const id = extractArxivId(url);
+  if (!id) throw new ClipError('arXiv paper id was not found', 'validation', false);
+
+  const absUrl = `https://arxiv.org/abs/${id}`;
+  const absHtml = await fetchArxivPage(absUrl);
+  const absNodes = parseHtml(absHtml);
+
+  const meta = readMetaTags(absHtml);
+  const authors = meta.filter((tag) => tag.key === 'citation_author').map((tag) => tag.content);
+  const common = {
+    source: 'arxiv',
+    title: meta.find((tag) => tag.key === 'citation_title')?.content ?? id,
+    author: authors.join(', ') || undefined,
+    // `citation_date`は`2026/08/18`の形で、初版の投稿日を指す。
+    publishedAt: meta.find((tag) => tag.key === 'citation_date')?.content.replace(/\//g, '-'),
+  } as const;
+
+  // 全文HTMLの在庫は、absページのこのリンクの有無がarXiv自身の宣言になっている。
+  const link = findDescendant(
+    absNodes,
+    (node) => node.tag === 'a' && node.attrs.id === 'latexml-download-link',
+  );
+  const htmlUrl = link?.attrs.href && new URL(link.attrs.href, absUrl).toString();
+  if (!htmlUrl) {
+    const abstract = arxivAbstract(absNodes);
+    if (!abstract) throw new ClipError('arXiv abs page had no abstract', 'fetch', false);
+    return finalize({ ...common, markdown: abstract, complete: false });
+  }
+
+  const paperHtml = await fetchArxivPage(htmlUrl);
+  // 左のTOCサイドバーには本文と同じ文字列が並ぶため、テキストではなく構造で本文を選ぶ。
+  const document = findDescendant(parseHtml(paperHtml), (node) =>
+    classList(node).includes('ltx_document'),
+  );
+  if (!document) throw new ClipError('arXiv HTML had no ltx_document', 'fetch', false);
+
+  return finalize({
+    ...common,
+    version: new URL(htmlUrl).pathname.match(/v\d+$/i)?.[0],
+    // 図の`src`が相対パスで来るため、取得したページのURLで解決する。
+    markdown: createHtmlToMarkdown({ baseUrl: htmlUrl, rules: arxivRules })(document.children),
     complete: true,
   });
 }
@@ -561,6 +458,8 @@ function fetchBody(url: URL, env: Env): Promise<FetchedBody> {
       return fetchZenn(url);
     case 'x':
       return fetchX(url, env);
+    case 'arxiv':
+      return fetchArxiv(url);
     case 'web':
       return fetchWeb(url, env);
   }

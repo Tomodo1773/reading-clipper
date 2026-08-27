@@ -52,6 +52,8 @@ describe('stored Markdown', () => {
 
     expect(markdown).not.toContain('summary');
     expect(markdown).not.toContain('## 取得内容');
+    // 版を持たない取得元では行ごと出ない。
+    expect(markdown).not.toContain('source_version');
     expect(markdown).toBe(
       [
         '---',
@@ -66,5 +68,24 @@ describe('stored Markdown', () => {
         '',
       ].join('\n'),
     );
+  });
+
+  it('records which revision the arXiv body came from', () => {
+    // canonical URLは版を含まないため、改版後に貼り直すと同じファイルを上書きする。
+    // どの版の本文かはこの行にしか残らない（ADR 0024）。
+    const markdown = renderClipMarkdown(
+      {
+        canonicalUrl: 'https://arxiv.org/abs/2608.18300',
+        source: 'arxiv',
+        title: 'A Paper About Judges',
+        version: 'v2',
+        markdown: '# A Paper About Judges',
+        complete: true,
+      },
+      clippedAt,
+    );
+
+    expect(markdown).toContain('source_type: "arxiv"');
+    expect(markdown).toContain('source_version: "v2"');
   });
 });

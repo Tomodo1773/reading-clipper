@@ -44,6 +44,40 @@ describe('URL handling', () => {
     }
   });
 
+  it('points every arXiv representation at the versionless abs page', () => {
+    // `abs`が論文の識別で、`html`と`pdf`はその表現。版を落とすのはarXiv自身が
+    // `link rel="canonical"`で版無しのURLを指しているため（ADR 0024）。
+    for (const raw of [
+      'https://arxiv.org/abs/2608.18300',
+      'https://arxiv.org/abs/2608.18300v2',
+      'https://arxiv.org/html/2608.18300v2',
+      'https://arxiv.org/pdf/2608.18300',
+      'https://arxiv.org/pdf/2608.18300v1.pdf',
+      'http://www.arxiv.org/abs/2608.18300/?utm_source=s',
+    ]) {
+      const url = canonicalizeUrl(raw);
+      expect(classifyUrl(url)).toBe('arxiv');
+      expect(url.toString()).toBe('https://arxiv.org/abs/2608.18300');
+    }
+
+    // 旧形式のIDはパスにスラッシュを含む。今も現役のURLなので落とさない。
+    expect(canonicalizeUrl('https://arxiv.org/abs/hep-th/9108001v3').toString()).toBe(
+      'https://arxiv.org/abs/hep-th/9108001',
+    );
+    expect(canonicalizeUrl('https://arxiv.org/pdf/math.AG/0611234').toString()).toBe(
+      'https://arxiv.org/abs/math.AG/0611234',
+    );
+
+    for (const raw of [
+      'https://arxiv.org/list/cs.AI/recent',
+      'https://arxiv.org/abs/not-an-id',
+      'https://export.arxiv.org/abs/2608.18300',
+      'https://example.com/abs/2608.18300',
+    ]) {
+      expect(classifyUrl(canonicalizeUrl(raw))).toBe('web');
+    }
+  });
+
   it('names the file after the article title, flat under clips/', () => {
     expect(buildClipPath('Cloudflare Workersの設計')).toBe('clips/Cloudflare-Workersの設計.md');
     // 日本語も大文字小文字もそのまま残す。ローマ字化や小文字化はしない。

@@ -20,6 +20,7 @@ export function canonicalizeUrl(rawUrl: string): URL {
   }
   if (url.hostname === 'www.qiita.com') url.hostname = 'qiita.com';
   if (url.hostname === 'www.zenn.dev') url.hostname = 'zenn.dev';
+  if (url.hostname === 'www.arxiv.org') url.hostname = 'arxiv.org';
 
   const source = classifyUrl(url);
   if (source !== 'web') {
@@ -29,6 +30,9 @@ export function canonicalizeUrl(rawUrl: string): URL {
   }
   if (source === 'qiita' || source === 'zenn') url.pathname = url.pathname.replace(/\.md$/i, '');
   if (source === 'x') url.pathname = `/i/web/status/${extractXPostId(url)}`;
+  // `abs`が論文の識別で、`html`と`pdf`はその表現。版を落とすのはarXiv自身の宣言に従う
+  // （`/abs/{id}v1`のページが`link rel="canonical"`で版無しのURLを指す。ADR 0024）。
+  if (source === 'arxiv') url.pathname = `/abs/${extractArxivId(url)}`;
   return url;
 }
 
@@ -39,7 +43,25 @@ export function classifyUrl(url: URL): ClipSource {
   // 本（/books/）やスクラップ（/scraps/）は記事と構造が違うため、記事だけを対象にする。
   if (url.hostname === 'zenn.dev' && extractZennArticleSlug(url)) return 'zenn';
   if (url.hostname === 'x.com' && extractXPostId(url)) return 'x';
+  if (extractArxivId(url)) return 'arxiv';
   return 'web';
+}
+
+/** 新形式（`2608.18300`）。 */
+const ARXIV_NEW_ID = /^\d{4}\.\d{4,5}$/;
+/** 旧形式（`hep-th/9108001`、`math.AG/0611234`）。パスにスラッシュを含む。 */
+const ARXIV_OLD_ID = /^[a-z-]+(?:\.[A-Za-z]{2})?\/\d{7}$/;
+
+/**
+ * `arxiv.org/{abs|html|pdf}/{id}`のIDを、版の接尾辞を落として返す。
+ * 版を含めないのは、arXiv自身が版を別資源ではなく同一資源の版として扱うため（ADR 0024）。
+ */
+export function extractArxivId(url: URL): string | undefined {
+  if (url.hostname !== 'arxiv.org') return undefined;
+  const path = url.pathname.replace(/\/$/, '').match(/^\/(?:abs|html|pdf)\/(.+?)(?:\.pdf)?$/i);
+  const id = path?.[1]?.replace(/v\d+$/i, '');
+  if (!id) return undefined;
+  return ARXIV_NEW_ID.test(id) || ARXIV_OLD_ID.test(id) ? id : undefined;
 }
 
 /** `zenn.dev/{user|publication}/articles/{slug}` のslugを返す。 */
