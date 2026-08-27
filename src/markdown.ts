@@ -12,6 +12,7 @@ export function renderClipMarkdown(content: FetchedContent, clippedAt: string): 
     ['title', content.title],
     ['author', content.author],
     ['published_at', content.publishedAt],
+    ['source_version', content.version],
     // D1が失われても再構成できるよう、正本のGitHub側にも残す（ADR 0011）。
     ['image_url', content.imageUrl],
     ['clipped_at', clippedAt],

@@ -1,6 +1,6 @@
 # ADR 0003: Zennの記事はZennの非公式APIから取得してMarkdownへ変換する
 
-- ステータス: Accepted
+- ステータス: Accepted（変換器の置き場所は[ADR 0024](0024-arxiv-full-text-from-latexml-html.md)で更新）
 - 日付: 2026-08-15
 
 ## 背景
@@ -26,7 +26,7 @@ Zennの記事（`zenn.dev/{user|publication}/articles/{slug}`）は、非公式A
 
 - タイトル、著者、公開日は同APIのJSONから埋める。
 - 本文は`body_html`をアプリ内でMarkdownへ変換する。`body_html`はZenn公式の`zenn-markdown-html`が生成した意味づけの残るHTMLで、見出し、表、リスト、コードブロック、`:::message`（`aside.msg`）、`:::details`、KaTeX（`embed-katex`）が要素として判別できる。ページ全体のHTMLと違い、ナビゲーションや広告のような本文以外の要素を含まない。
-- 変換器は依存パッケージを追加せず、この`body_html`が使う要素の範囲に絞って`src/fetchers.ts`に実装する。
+- 変換器は依存パッケージを追加せず、この`body_html`が使う要素の範囲に絞って`src/fetchers.ts`に実装する。2つ目の利用者（arXiv）が現れたため、変換器そのものは[ADR 0024](0024-arxiv-full-text-from-latexml-html.md)で`src/html-markdown.ts`へ切り出し、Zenn固有のルールだけが`src/fetchers.ts`に残っている。依存を追加しないという判断は変えていない。
 - 専用経路が失敗した場合、汎用のFirecrawl経路へはフォールバックせず`ClipError`にする。retryableの判定は既存の`assertOk`に任せる（404などは再試行しない）。
 
 本、スクラップ、ユーザーページはこの経路の対象外で、従来どおり汎用Webとして扱う。

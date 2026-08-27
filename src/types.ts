@@ -1,7 +1,7 @@
 import type { ThreadAgent } from './thread';
 import type { ToolState } from './tool-state';
 
-export type ClipSource = 'qiita' | 'zenn' | 'x' | 'web';
+export type ClipSource = 'qiita' | 'zenn' | 'x' | 'arxiv' | 'web';
 
 /**
  * SlackからQueueへ渡す、1通ぶんの会話。
@@ -33,6 +33,11 @@ export interface FetchedContent {
   title: string;
   author?: string;
   publishedAt?: string;
+  /**
+   * 取得元が持つ改版の識別子（arXivの`v2`など）。canonical URLは版を含まないため、
+   * 改版後に貼り直すと同じファイルを上書きする。どの版の本文かはここにしか残らない（ADR 0024）。
+   */
+  version?: string;
   /** 記事ページのog:image。ダイジェストのサムネイルに使う（ADR 0011）。 */
   imageUrl?: string;
   markdown: string;

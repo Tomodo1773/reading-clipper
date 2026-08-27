@@ -167,6 +167,126 @@ describe('source fetchers', () => {
       status: 404,
     });
   });
+
+  const ARXIV_ABS_HEAD = [
+    '<meta name="citation_title" content="A Paper About Judges">',
+    '<meta name="citation_author" content="Kong, Emma">',
+    '<meta name="citation_author" content="Tan, JJ">',
+    '<meta name="citation_date" content="2026/08/18">',
+  ].join('\n');
+
+  const ARXIV_ABSTRACT =
+    '<blockquote class="abstract mathjax"><span class="descriptor">Abstract:</span> 要旨だけ。</blockquote>';
+
+  /** LaTeXMLの出力のうち、変換で判断が要る部分だけを写したもの。 */
+  const ARXIV_PAPER_HTML = [
+    '<html><body>',
+    '<div class="ltx_page_navbar"><nav class="ltx_TOC">',
+    '<a href="#S1" class="ltx_ref">サイドバーの目次</a></nav></div>',
+    '<div class="ltx_page_content"><article class="ltx_document ltx_authors_1line">',
+    '<h1 class="ltx_title ltx_title_document">A Paper About Judges</h1>',
+    '<span class="ltx_pubnotes"><span class="ltx_pubnote ltx_role_ccs">CCS: 分類語</span></span>',
+    '<div class="ltx_authors"><span class="ltx_personname">Kong, Emma',
+    '<span class="ltx_contact">email: kong@example.com</span></span></div>',
+    '<section class="ltx_section"><h2 class="ltx_title">1 Introduction</h2>',
+    '<div class="ltx_para"><p class="ltx_p">Budget <math class="ltx_Math" alttext="k" display="inline">',
+    '<semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math>',
+    ' rises. See Figure <a href="#S1.F1" class="ltx_ref"><span class="ltx_text">1</span></a>.</p></div>',
+    '<div class="ltx_para"><p class="ltx_p"><math class="ltx_Math" alttext="E=mc^2" display="block">',
+    '<semantics><mi>E</mi></semantics></math></p></div>',
+    '<figure class="ltx_figure"><img src="figures/lifecycle.png" class="ltx_graphics" alt="A cycle diagram.">',
+    '<figcaption class="ltx_caption">Figure 1. 流れ図。</figcaption></figure>',
+    '<div class="ltx_listing ltx_framed">',
+    '<div class="ltx_listingline"><span class="ltx_tag">1:</span> initial rubric</div>',
+    '<div class="ltx_listingline"><span class="ltx_tag">2:</span> repeat</div></div>',
+    '</section></article></div>',
+    '<footer><img src="/static/funder.png" alt="スポンサーのロゴ"></footer>',
+    '</body></html>',
+  ].join('\n');
+
+  function arxivResponses(absBody: string): (input: RequestInfo | URL) => Response {
+    return (input) => {
+      const url = String(input);
+      if (url === 'https://arxiv.org/abs/2608.18300') {
+        return new Response(`<html><head>${ARXIV_ABS_HEAD}</head><body>${absBody}</body></html>`, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      }
+      if (url === 'https://arxiv.org/html/2608.18300v2') {
+        return new Response(ARXIV_PAPER_HTML, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+  }
+
+  it('takes the arXiv body from the LaTeXML HTML the abs page links to', async () => {
+    const link =
+      '<a href="https://arxiv.org/html/2608.18300v2" id="latexml-download-link">HTML (experimental)</a>';
+    const requested: string[] = [];
+    const respond = arxivResponses(`${ARXIV_ABSTRACT}${link}`);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      requested.push(String(input));
+      return respond(input);
+    });
+
+    const result = await fetchContent('https://arxiv.org/pdf/2608.18300v1', makeEnv());
+
+    // absページのリンクが在庫と版の両方を決める。404を踏んで確かめない。
+    expect(requested).toEqual([
+      'https://arxiv.org/abs/2608.18300',
+      'https://arxiv.org/html/2608.18300v2',
+    ]);
+    expect(result).toMatchObject({
+      source: 'arxiv',
+      canonicalUrl: 'https://arxiv.org/abs/2608.18300',
+      title: 'A Paper About Judges',
+      author: 'Kong, Emma, Tan, JJ',
+      publishedAt: '2026-08-18',
+      version: 'v2',
+      complete: true,
+    });
+
+    const { markdown } = result;
+    expect(markdown).toContain('# A Paper About Judges');
+    expect(markdown).toContain('## 1 Introduction');
+    // 数式はLaTeX原文（`alttext`）から起こす。MathMLの中身とTeX注釈を二重に出さない。
+    expect(markdown).toContain('Budget $k$ rises.');
+    expect(markdown).toContain('$$\nE=mc^2\n$$');
+    expect(markdown).not.toContain('<annotation');
+    // 章内の相互参照はリンクにならず、本文の表記だけが残る。
+    expect(markdown).toContain('See Figure 1.');
+    // 図の相対URLは取得したページのURLで解決する。
+    expect(markdown).toContain('![A cycle diagram.](https://arxiv.org/html/figures/lifecycle.png)');
+    expect(markdown).toContain('Figure 1. 流れ図。');
+    // 擬似コードは1行ずつ段落へ割らず、コードブロックにする。
+    expect(markdown).toContain('```\n1: initial rubric\n2: repeat\n```');
+    // 本文の外にあるものは持ち込まない。
+    expect(markdown).not.toContain('サイドバーの目次');
+    expect(markdown).not.toContain('スポンサーのロゴ');
+    // タイトルと抄録の間の書誌の飾りは落とす。残すとダイジェストの抜粋がここで埋まる。
+    expect(markdown).not.toContain('kong@example.com');
+    expect(markdown).not.toContain('CCS: 分類語');
+  });
+
+  it('keeps only the abstract when arXiv has no HTML for the paper', async () => {
+    const respond = arxivResponses(ARXIV_ABSTRACT);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => respond(input));
+
+    const result = await fetchContent('https://arxiv.org/abs/2608.18300', makeEnv());
+
+    expect(result).toMatchObject({
+      source: 'arxiv',
+      title: 'A Paper About Judges',
+      markdown: '要旨だけ。',
+      complete: false,
+    });
+    expect(result.version).toBeUndefined();
+  });
+
 });
 
 /**

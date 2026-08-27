@@ -45,6 +45,32 @@ export function parseAttributes(raw: string): Record<string, string> {
   return attrs;
 }
 
+export interface MetaTag {
+  /** `property`を優先し、無ければ`name`。小文字にそろえる。 */
+  key: string;
+  content: string;
+}
+
+/**
+ * `<meta>`を書かれた順に読む。
+ *
+ * 辞書ではなく列で返すのは、同じキーが何度も並ぶ場合があるためである（arXivのabsページは
+ * `citation_author`を著者の数だけ並べる）。キーか値が空のものはここで落とす。
+ */
+export function readMetaTags(html: string): MetaTag[] {
+  const tags: MetaTag[] = [];
+  for (const tag of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const attrs = parseAttributes(tag[0].slice('<meta'.length, -1));
+    const key = (attrs.property ?? attrs.name ?? '').toLowerCase();
+    const content = attrs.content?.trim();
+    if (!key || !content) continue;
+    tags.push({ key, content });
+  }
+  return tags;
+}
+
+const OG_IMAGE_KEYS = new Set(['og:image', 'og:image:url', 'og:image:secure_url']);
+
 /**
  * `og:image`を絶対URLとして返す。相対パスで書くサイトがあるため`pageUrl`で解決する。
  * Slackへ渡せるのはhttp(s)の絶対URLだけなので、`data:`などはここで落とす。
@@ -52,16 +78,10 @@ export function parseAttributes(raw: string): Record<string, string> {
  * どこまでのHTMLを渡すかは呼び出し側が決める。Worker側は`</head>`で打ち切った分だけを渡す。
  */
 export function findOgImage(html: string, pageUrl: string): string | undefined {
-  for (const tag of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attrs = parseAttributes(tag[0].slice('<meta'.length, -1));
-    const key = (attrs.property ?? attrs.name ?? '').toLowerCase();
-    if (key !== 'og:image' && key !== 'og:image:url' && key !== 'og:image:secure_url') continue;
-    const content = attrs.content?.trim();
-    if (!content) continue;
-    const resolved = new URL(content, pageUrl);
-    return resolved.protocol === 'https:' || resolved.protocol === 'http:'
-      ? resolved.toString()
-      : undefined;
-  }
-  return undefined;
+  const tag = readMetaTags(html).find((meta) => OG_IMAGE_KEYS.has(meta.key));
+  if (!tag) return undefined;
+  const resolved = new URL(tag.content, pageUrl);
+  return resolved.protocol === 'https:' || resolved.protocol === 'http:'
+    ? resolved.toString()
+    : undefined;
 }
