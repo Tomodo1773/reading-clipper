@@ -11,7 +11,7 @@ import {
   type ClipRow,
 } from './clips';
 import { applyClipDismissal } from './dismiss';
-import { asClipError, type ProcessingStage } from './errors';
+import { logFailure } from './errors';
 import { clipExcerpt } from './excerpt';
 import { loadContent, truncateContent } from './fetchers';
 import { parseClipFrontMatter } from './front-matter';
@@ -28,27 +28,9 @@ import {
   coreToolSchemas,
 } from './tool-contract';
 import type { ClipRefPayload } from './tool-state';
+import { queueTranslation } from './translate';
 import type { Env, FetchedContent } from './types';
 import { buildClipPath } from './url';
-
-function toolFailure(
-  error: unknown,
-  stage: ProcessingStage,
-  toolName: string,
-  extra: Record<string, unknown> = {},
-): ProcessingStage {
-  const clipError = asClipError(error, stage);
-  console.warn(
-    JSON.stringify({
-      stage: clipError.stage,
-      status: clipError.status,
-      message: clipError.message,
-      tool: toolName,
-      ...extra,
-    }),
-  );
-  return clipError.stage;
-}
 
 /**
  * フロントマターの真偽値を読む。GitHub上へ手で置かれたファイルなど、書かれていないこともある。
@@ -77,7 +59,7 @@ async function findSavedClips(env: Env, query: string): Promise<SearchClip[]> {
   try {
     annotations = await selectClipsByPath(env, matches.map((match) => match.path));
   } catch (error) {
-    toolFailure(error, 'clips', 'find_clips_annotations');
+    logFailure(error, 'clips', 'find_clips_annotations');
   }
   return matches.map((match) => {
     const annotation = annotations.get(match.path);
@@ -93,7 +75,12 @@ async function findSavedClips(env: Env, query: string): Promise<SearchClip[]> {
   });
 }
 
-async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string) {
+async function saveLoaded(
+  env: Env,
+  content: FetchedContent,
+  receivedAt: string,
+  bodyLanguage: string | undefined,
+) {
   const path = buildClipPath(content.title);
   const existing = await getGitHubFile(env, path);
   const saved = await putGitHubFile(env, path, renderClipMarkdown(content, receivedAt), {
@@ -110,7 +97,14 @@ async function saveLoaded(env: Env, content: FetchedContent, receivedAt: string)
     });
     await refreshClipIndexBestEffort(env, path);
   } catch (error) {
-    toolFailure(error, 'clips', 'save_loaded', { path });
+    logFailure(error, 'clips', 'save_loaded', { path });
+  }
+  // 日本語でなければ翻訳の札を投げる。訳すのは待ち行列の向こうで、保存の返りは待たない。
+  // 通常BotもMCPもこの1箇所を通るので、入口によらず同じように訳される（ADR 0027）。
+  try {
+    await queueTranslation(env, { path, sha: saved.sha }, bodyLanguage);
+  } catch (error) {
+    logFailure(error, 'clips', 'queue_translation', { path });
   }
   return { saved: true as const, path, github_url: saved.htmlUrl, title: content.title };
 }
@@ -142,19 +136,20 @@ export async function loadContentTool(
       body: content.markdown,
     };
   } catch (error) {
-    return { loaded: false, failed_at: toolFailure(error, 'fetch', 'load_content') };
+    return { loaded: false, failed_at: logFailure(error, 'fetch', 'load_content') };
   }
 }
 
 export async function saveLoadedTool(env: Env, ownerId: string, receivedAt: string, rawArgs: unknown) {
-  const { loaded_ref: ref } = coreToolSchemas.save_loaded.parse(rawArgs);
+  const { loaded_ref: ref, body_language: bodyLanguage } =
+    coreToolSchemas.save_loaded.parse(rawArgs);
   const state = env.TOOL_STATE.get(env.TOOL_STATE.idFromName(ownerId));
   const resolved = await state.resolveLoaded(ref);
   if (!resolved.ok) return { saved: false as const, ...refFailure(ref, resolved.error) };
   try {
-    return await saveLoaded(env, resolved.payload, receivedAt);
+    return await saveLoaded(env, resolved.payload, receivedAt, bodyLanguage);
   } catch (error) {
-    return { saved: false as const, failed_at: toolFailure(error, 'github', 'save_loaded') };
+    return { saved: false as const, failed_at: logFailure(error, 'github', 'save_loaded') };
   }
 }
 
@@ -164,7 +159,7 @@ export async function setClipDismissedTool(env: Env, receivedAt: string, rawArgs
     const found = await applyClipDismissal(env, { path, dismissed, at: receivedAt });
     return found ? { updated: true, path, dismissed } : { updated: false, unknown_path: path };
   } catch (error) {
-    return { updated: false, failed_at: toolFailure(error, 'clips', 'set_clip_dismissed') };
+    return { updated: false, failed_at: logFailure(error, 'clips', 'set_clip_dismissed') };
   }
 }
 
@@ -190,7 +185,7 @@ export async function findClipsTool(env: Env, ownerId: string, rawArgs: unknown)
     );
     return { found };
   } catch (error) {
-    return { found: [], failed_at: toolFailure(error, 'github', 'find_clips') };
+    return { found: [], failed_at: logFailure(error, 'github', 'find_clips') };
   }
 }
 
@@ -222,7 +217,7 @@ export async function readClipTool(env: Env, ownerId: string, rawArgs: unknown) 
   } catch (error) {
     return {
       found: false,
-      failed_at: toolFailure(error, 'github', 'read_clip', { path: clip.path }),
+      failed_at: logFailure(error, 'github', 'read_clip', { path: clip.path }),
     };
   }
 }
@@ -237,13 +232,13 @@ export async function deleteClipTool(env: Env, ownerId: string, rawArgs: unknown
   try {
     removed = await deleteGitHubFile(env, clip.path);
   } catch (error) {
-    return { deleted: false, failed_at: toolFailure(error, 'github', 'delete_clip') };
+    return { deleted: false, failed_at: logFailure(error, 'github', 'delete_clip') };
   }
   try {
     await deleteClip(env, clip.path);
     await refreshClipIndexBestEffort(env, clip.path);
   } catch (error) {
-    toolFailure(error, 'clips', 'delete_clip', { path: clip.path });
+    logFailure(error, 'clips', 'delete_clip', { path: clip.path });
   }
   return { deleted: true, title: clip.title, github: removed ? 'deleted' : 'missing' };
 }

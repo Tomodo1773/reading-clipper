@@ -19,6 +19,18 @@ export interface ChatJob {
 }
 
 /**
+ * 保存済みクリップ1件を日本語へ訳す札（ADR 0027）。
+ *
+ * 本文は載せない。訳すのは待ち行列の向こうなので、その時点のGitHubの内容を読み直す。
+ */
+export interface TranslateJob {
+  version: 1;
+  path: string;
+  /** 保存した直後のファイルのSHA。書き戻す前に突き合わせ、別の保存を踏まない。 */
+  sha: string;
+}
+
+/**
  * 1ターンで保存できたクリップ。返信へ付ける「片付ける」ボタンの材料になる（ADR 0015）。
  * 保存が起きたかどうかはモデルの文面ではなくツールの実行結果で判定する。
  */
@@ -48,6 +60,8 @@ export interface FetchedContent {
 export interface Env {
   // wrangler.jsonc由来
   CLIP_QUEUE: Queue<ChatJob>;
+  /** 保存の後で走る翻訳。クリップの応答時間から切り離すためだけに在る（ADR 0027）。 */
+  TRANSLATE_QUEUE: Queue<TranslateJob>;
   /** スレッド単位の会話状態。`{channel}:{thread_ts}` で引く。 */
   THREAD: DurableObjectNamespace<ThreadAgent>;
   /** owner単位のopaque tool ref（ADR 0022）。 */

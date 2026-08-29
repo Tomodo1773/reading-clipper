@@ -3,7 +3,7 @@ import { env as testEnv } from 'cloudflare:test';
 import schema from '../schema.sql?raw';
 import type { ThreadAgent } from '../src/thread';
 import type { ToolState } from '../src/tool-state';
-import type { ChatJob, Env } from '../src/types';
+import type { ChatJob, Env, TranslateJob } from '../src/types';
 
 let toolOwnerSequence = 0;
 let toolOwnerId = 'test-owner-0';
@@ -22,6 +22,9 @@ export async function resetClips(): Promise<void> {
 export function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     CLIP_QUEUE: { send: async (_job: ChatJob) => undefined } as unknown as Queue<ChatJob>,
+    TRANSLATE_QUEUE: {
+      send: async (_job: TranslateJob) => undefined,
+    } as unknown as Queue<TranslateJob>,
     THREAD: {
       idFromName() {
         throw new Error('THREAD was used without a stub in this test');

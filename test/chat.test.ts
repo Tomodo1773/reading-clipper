@@ -5,6 +5,7 @@ import { runChatTurn } from '../src/chat';
 import { recordClip } from '../src/clips';
 import { ClipError } from '../src/errors';
 import { resetGitHubTokenCache } from '../src/github';
+import type { TranslateJob } from '../src/types';
 import { base64ToUtf8, utf8ToBase64 } from '../src/utils';
 import {
   generatePrivateKeyPem,
@@ -252,6 +253,39 @@ describe('chat turn', () => {
       'tool',
       'assistant',
     ]);
+  });
+
+  it('queues a translation when the model reports a non-Japanese body', async () => {
+    mockWorld([
+      loadCallReply('https://qiita.com/alice/items/abc'),
+      toolCallReply('save_loaded', { loaded_ref: LOADED_REF_1, body_language: 'en' }),
+      modelResponse([{ text: '英語の記事ね。置いておいたわ。' }]),
+    ]);
+    const queued: TranslateJob[] = [];
+
+    const turn = await runChatTurn({
+      env: makeEnv({
+        GITHUB_APP_PRIVATE_KEY: privateKeyPem,
+        TRANSLATE_QUEUE: {
+          send: async (job: TranslateJob) => {
+            queued.push(job);
+          },
+        } as unknown as Queue<TranslateJob>,
+      }),
+      history: [],
+      userText: 'https://qiita.com/alice/items/abc',
+      receivedAt: RECEIVED_AT,
+    });
+
+    // 保存の直後に札を1枚投げるだけ。訳し終わるのを待たない（ADR 0027）。
+    expect(queued).toEqual([{ version: 1, path: 'clips/Worker設計.md', sha: 'new-sha' }]);
+    // 返信も保存の結果も、翻訳のことは何も持たない。
+    expect(toolOutput(turn.appended, 'save_loaded')).toEqual({
+      saved: true,
+      path: 'clips/Worker設計.md',
+      github_url: 'https://github.com/example/clips/blob/main/clip.md',
+      title: 'Worker設計',
+    });
   });
 
   it('saves the same snapshot from a loaded_ref in a later Slack turn', async () => {

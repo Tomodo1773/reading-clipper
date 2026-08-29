@@ -1,12 +1,5 @@
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { APICallError } from '@ai-sdk/provider';
-import {
-  generateText,
-  type ModelMessage,
-  RetryError,
-  type StaticToolResult,
-  stepCountIs,
-} from 'ai';
+import { generateText, type ModelMessage, type StaticToolResult, stepCountIs } from 'ai';
+import { createProvider, throwModelCallError } from './ai';
 import { ClipError } from './errors';
 import { createTools } from './tools';
 import type { Env, SavedClip } from './types';
@@ -31,6 +24,7 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 - 読んだ結果が、他の記事を紹介しているだけの短い投稿だったとき。本命はリンク先なので、本文の中にあるリンク先のURLをload_contentで読み直し、そちらのloaded_refをsave_loadedへ渡す。紹介していた投稿の方は保存しない。誰が何と言って紹介していたかは、返信の中で触れてよい。
 - 読んだ結果が、そもそも記事ではなかったとき（ログイン画面、同意画面、エラーページ、中身の無い中継ページ）。保存せず、何が返ってきたかを伝える。
 - 保存するかどうか迷ったときは、保存する側に倒す。保存しないのは、上の「記事ではなかった」場合だけ。
+- save_loadedには、load_contentで読んだ本文が何語だったかをbody_languageで渡す（日本語ならja、英語ならen）。紹介投稿からリンク先を保存するときは、紹介元ではなく保存する方の記事の言語を渡す。
 - loadedがfalseなら中身が読めていない。failed_atがどこで失敗したかを示す（validationならURLとして扱えなかった、fetchなら本文が取れなかった）。読めたことにしない。
 
 # 検索を使うとき
@@ -98,24 +92,6 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 const MAX_STEPS = 8;
 
 /**
- * AI GatewayのGoogle AI Studioパススルーへ向ける。
- *
- * Geminiのキーはゲートウェイ側にStored Keys（BYOK）として置いてあり、Workerは持たない。
- * providerは`apiKey`を必須にしているためプレースホルダを渡し、実際に送る
- * `x-goog-api-key`はundefinedで落とす。認証は`cf-aig-authorization`だけで通る。
- */
-function createProvider(env: Env) {
-  return createGoogleGenerativeAI({
-    baseURL: `https://gateway.ai.cloudflare.com/v1/${env.CLOUDFLARE_ACCOUNT_ID}/${env.AI_GATEWAY_ID}/google-ai-studio/v1beta`,
-    apiKey: 'stored-by-ai-gateway',
-    headers: {
-      'x-goog-api-key': undefined,
-      'cf-aig-authorization': `Bearer ${env.AI_GATEWAY_TOKEN}`,
-    },
-  });
-}
-
-/**
  * 1ターンぶんの会話を進める。
  *
  * 返す`appended`は、このターンで会話へ追加された分だけ。呼び出し側が成功後にまとめて永続化する。
@@ -145,24 +121,7 @@ export async function runChatTurn(options: {
       temperature: 0.8,
     });
   } catch (error) {
-    // AI SDKは内部再試行を使い切るとAPICallErrorではなくRetryErrorを投げる。
-    // 中身を出さずに素通りさせると、stage・status・retryableの分類が全部落ちる（ADR 0008）。
-    const failure = RetryError.isInstance(error) ? error.lastError : error;
-    // ステータスだけでは何を拒否されたか分からない。ゲートウェイの返す理由をログへ残す。
-    if (APICallError.isInstance(failure)) {
-      throw new ClipError(
-        `${failure.message}: ${(failure.responseBody ?? '').slice(0, 600)}`,
-        'chat',
-        failure.isRetryable,
-        failure.statusCode,
-        { cause: failure },
-      );
-    }
-    // 中身を分類できなくても、モデル呼び出しで落ちたことだけは残す。
-    if (RetryError.isInstance(error)) {
-      throw new ClipError(error.message, 'chat', true, undefined, { cause: error });
-    }
-    throw error;
+    throwModelCallError(error);
   }
 
   const reply = result.text.trim();

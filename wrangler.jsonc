@@ -43,6 +43,11 @@
       {
         "queue": "reading-clipper-clips",
         "binding": "CLIP_QUEUE"
+      },
+      // 保存の後で走る翻訳（ADR 0027）。クリップの応答時間から切り離すためだけに在る。
+      {
+        "queue": "reading-clipper-translations",
+        "binding": "TRANSLATE_QUEUE"
       }
     ],
     "consumers": [
@@ -56,6 +61,16 @@
         "max_concurrency": 1,
         "max_retries": 3,
         "dead_letter_queue": "reading-clipper-clips-dlq"
+      },
+      {
+        "queue": "reading-clipper-translations",
+        "max_batch_size": 1,
+        // 会話の直列化とは別の理由で1件ずつにする。同じrepositoryへの書き込みと
+        // 新着一覧の作り直しが重なると、409の取り合いを自分で増やすことになる。
+        "max_concurrency": 1,
+        "max_retries": 3
+        // dead letter queueは持たない。訳せなかったクリップは元の言語のまま残るので、
+        // 拾い直す先を作らず捨てる（ADR 0027）。
       }
     ]
   },

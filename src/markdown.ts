@@ -4,7 +4,18 @@ function frontMatterValue(value: string | boolean): string {
   return typeof value === 'boolean' ? String(value) : JSON.stringify(value);
 }
 
-/** フロントマターの直下に、取得した本文をそのまま置く。 */
+/**
+ * フロントマターの直下に本文を置く、保存するMarkdownの形。
+ *
+ * 値は書く側が整えて渡す。翻訳で書き戻すときは読んだ値をそのまま並べ直すため、
+ * ここでは項目を解釈しない（ADR 0027）。
+ */
+export function renderMarkdown(fields: Array<[string, string]>, body: string): string {
+  const frontMatter = fields.map(([key, value]) => `${key}: ${value}`).join('\n');
+  return `---\n${frontMatter}\n---\n\n${body.trim()}\n`;
+}
+
+/** 取得した本文を、そのまま保存する形へ組み立てる。 */
 export function renderClipMarkdown(content: FetchedContent, clippedAt: string): string {
   const fields: Array<[string, string | boolean | undefined]> = [
     ['source_url', content.canonicalUrl],
@@ -18,9 +29,10 @@ export function renderClipMarkdown(content: FetchedContent, clippedAt: string): 
     ['clipped_at', clippedAt],
     ['fetch_complete', content.complete],
   ];
-  const frontMatter = fields
-    .filter((field): field is [string, string | boolean] => field[1] !== undefined)
-    .map(([key, value]) => `${key}: ${frontMatterValue(value)}`)
-    .join('\n');
-  return `---\n${frontMatter}\n---\n\n${content.markdown.trim()}\n`;
+  return renderMarkdown(
+    fields
+      .filter((field): field is [string, string | boolean] => field[1] !== undefined)
+      .map(([key, value]) => [key, frontMatterValue(value)]),
+    content.markdown,
+  );
 }
