@@ -5,7 +5,7 @@ import {
   isGeneratedClipIndex,
   renderClipIndex,
 } from './clip-index-format';
-import { asClipError, ClipError } from './errors';
+import { ClipError, logFailure } from './errors';
 import { getGitHubTextFile, putGitHubFile } from './github';
 import type { Env } from './types';
 
@@ -62,15 +62,6 @@ export async function refreshClipIndexBestEffort(env: Env, path: string): Promis
   try {
     await refreshClipIndex(env);
   } catch (error) {
-    const clipError = asClipError(error, 'github');
-    console.warn(
-      JSON.stringify({
-        stage: clipError.stage,
-        status: clipError.status,
-        message: clipError.message,
-        tool: 'refresh_clip_index',
-        path,
-      }),
-    );
+    logFailure(error, 'github', 'refresh_clip_index', { path });
   }
 }

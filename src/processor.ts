@@ -2,9 +2,10 @@ import type { ModelMessage } from 'ai';
 import { SlackAPIClient } from 'slack-edge';
 import { runChatTurn } from './chat';
 import { clipReplyBlocks } from './dismiss';
-import { asClipError, ClipError } from './errors';
+import { asClipError, ClipError, settleQueueFailure } from './errors';
 import type { ChatJob, Env } from './types';
 
+/** 詫びを出す回。配達を諦める回数そのものはqueue側の`max_retries`が持つ。 */
 const MAX_QUEUE_RETRIES = 3;
 
 function validateJob(job: ChatJob): void {
@@ -70,48 +71,30 @@ export async function handleQueueMessage(message: Message<ChatJob>, env: Env): P
     message.ack();
   } catch (error) {
     const clipError = asClipError(error, 'validation');
-    console.error(
-      JSON.stringify({
-        jobId: job?.jobId,
-        stage: clipError.stage,
-        status: clipError.status,
-        // 同じstageでも原因が複数あるため、どれで落ちたかをログから判別できるようにする。
-        message: clipError.message,
-        retryable: clipError.retryable,
-        attempts: message.attempts,
-      }),
-    );
+    settleQueueFailure(message, clipError, { jobId: job?.jobId });
 
+    // 詫びは諦めたときの1回だけ出す。再試行のたびに言わない。
     const giveUp = !clipError.retryable || message.attempts > MAX_QUEUE_RETRIES;
     // 返信先が読めない壊れたメッセージでは通知そのものが投げるため、送り先がある場合だけ通知する。
-    if (giveUp && job?.slackChannel && job.slackThreadTs) {
-      try {
-        await slack.chat.postMessage({
-          channel: job.slackChannel,
-          thread_ts: job.slackThreadTs,
-          text: failureReply(clipError),
-          unfurl_links: false,
-          unfurl_media: false,
-        });
-      } catch (replyError) {
-        const slackError = asClipError(replyError, 'slack');
-        console.error(
-          JSON.stringify({
-            jobId: job?.jobId,
-            stage: slackError.stage,
-            status: slackError.status,
-            notificationFailed: true,
-          }),
-        );
-      }
+    if (!giveUp || !job?.slackChannel || !job.slackThreadTs) return;
+    try {
+      await slack.chat.postMessage({
+        channel: job.slackChannel,
+        thread_ts: job.slackThreadTs,
+        text: failureReply(clipError),
+        unfurl_links: false,
+        unfurl_media: false,
+      });
+    } catch (replyError) {
+      const slackError = asClipError(replyError, 'slack');
+      console.error(
+        JSON.stringify({
+          jobId: job?.jobId,
+          stage: slackError.stage,
+          status: slackError.status,
+          notificationFailed: true,
+        }),
+      );
     }
-
-    if (!clipError.retryable) {
-      message.ack();
-      return;
-    }
-    message.retry({
-      delaySeconds: Math.min(30 * 2 ** Math.max(0, message.attempts - 1), 900),
-    });
   }
 }

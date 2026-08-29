@@ -87,6 +87,16 @@ export async function recordClip(env: Env, clip: ClipRecord): Promise<void> {
     .run();
 }
 
+/**
+ * 抜粋だけを差し替える（ADR 0027）。翻訳で本文が日本語へ変わったときに呼ぶ。
+ *
+ * `recordClip`を通さないのは、題名とURLを触らないため。ファイル名は原題のままなので、
+ * 台帳の題名だけを訳題にすると保存先と表示が食い違う。変えるのは一覧に出る抜粋だけでいい。
+ */
+export async function updateClipExcerpt(env: Env, path: string, excerpt: string): Promise<void> {
+  await env.CLIPS.prepare('UPDATE clips SET excerpt = ? WHERE path = ?').bind(excerpt, path).run();
+}
+
 function placeholders(count: number): string {
   return new Array(count).fill('?').join(', ');
 }

@@ -5,6 +5,13 @@ export const coreToolSchemas = {
   load_content: z.object({ url: z.string().url().describe('読み込む記事のHTTP(S) URL。') }),
   save_loaded: z.object({
     loaded_ref: z.string().min(1).describe('load_contentが返したopaqueなloaded_ref。'),
+    body_language: z
+      .string()
+      .trim()
+      .min(2)
+      .max(40)
+      .optional()
+      .describe('保存する本文の言語（BCP 47の言語コード。日本語ならja、英語ならen）。'),
   }),
   set_clip_dismissed: z.object({
     path: z.string().startsWith('clips/').describe('clips/ から始まるクリップのパス。'),
@@ -36,7 +43,7 @@ export const coreToolDescriptions: Record<CoreToolName, string> = {
   load_content:
     'URLの中身を読み込み、全文とopaqueなloaded_refを返す。保存はしない。リダイレクトは自動で追う。',
   save_loaded:
-    'load_contentが返したloaded_refの本文snapshotを再取得せずGitHubへ保存する。未発行・期限切れrefは拒否する。',
+    'load_contentが返したloaded_refの本文snapshotを再取得せずGitHubへ保存する。未発行・期限切れrefは拒否する。body_languageが日本語以外なら、保存の後で本文を日本語へ置き換える翻訳が非同期で走る。渡さないと翻訳しない。',
   set_clip_dismissed:
     'D1に実在する保存済みクリップへ「片付けた」印を付ける、または外す。1回につき1件。',
   find_clips:

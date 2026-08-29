@@ -2,7 +2,8 @@ import { type ButtonAction, type MessageBlockAction, SlackApp } from 'slack-edge
 import { runWeeklyDigest } from './digest';
 import { DISMISS_ACTION_ID, dismissClip } from './dismiss';
 import { handleQueueMessage } from './processor';
-import type { ChatJob, Env } from './types';
+import { handleTranslateMessage, TRANSLATION_QUEUE } from './translate';
+import type { ChatJob, Env, TranslateJob } from './types';
 
 export { CoreMcpEntrypoint } from './core-rpc';
 export { ToolState } from './tool-state';
@@ -88,11 +89,22 @@ function slackApp(env: Env): SlackApp<Env> {
 
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => slackApp(env).run(request, ctx),
-  async queue(batch: MessageBatch<ChatJob>, env: Env): Promise<void> {
-    await Promise.all(batch.messages.map((message) => handleQueueMessage(message, env)));
+  /**
+   * 会話と翻訳で待ち行列を分けているので、どちらから届いたかで振り分ける（ADR 0027）。
+   * 会話側は履歴の交錯を避けるため1件ずつ直列に消費する設定のままにしてある（ADR 0008）。
+   */
+  async queue(batch: MessageBatch<ChatJob | TranslateJob>, env: Env): Promise<void> {
+    // どちらのハンドラも、受け取った本体の形を自分で検証してから使う。
+    if (batch.queue === TRANSLATION_QUEUE) {
+      const messages = batch.messages as Message<TranslateJob>[];
+      await Promise.all(messages.map((message) => handleTranslateMessage(message, env)));
+      return;
+    }
+    const messages = batch.messages as Message<ChatJob>[];
+    await Promise.all(messages.map((message) => handleQueueMessage(message, env)));
   },
   /** 週次ダイジェスト（ADR 0010）。 */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     await runWeeklyDigest(env);
   },
-} satisfies ExportedHandler<Env, ChatJob>;
+} satisfies ExportedHandler<Env, ChatJob | TranslateJob>;

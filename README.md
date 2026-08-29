@@ -30,6 +30,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   保存時に1〜2文で要約し、続けて質問すると取得済みの本文を踏まえて回答。同じスレッドでは記事を取り直さない。
 - **MarkdownをGitHubへ保存**
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存。
+- **日本語でない記事は保存の後で日本語へ**
+  AIが本文を読んだ時点で日本語以外だと分かった記事は、保存の直後に翻訳を積み、本文を訳文へ置き換える。クリップの返信を待たせないよう非同期で走るため、ファイルが日本語になるのは保存の数分後になる。原文は同じパスの1つ前のコミットに残り、題名とファイル名は原題のまま変えない（[ADR 0027](docs/adr/0027-translate-clips-into-japanese-after-saving.md)）。
 - **最近保存したクリップをGitHubで一覧**
   保存先の`clips/README.md`へ最新20件を新しい順で自動表示。まだ片付けていない上位5件はサムネイルと冒頭の抜粋を添えたカードで並べ、それ以前は箇条書きにする。片付けたクリップは取り消し線で消し、見出しには保存総数と残りの件数を出す。タイトルから元の記事へ直接移動でき、記事のファイル名は日付で長くせずタイトルのまま保つ。
 - **保存済みクリップを本文から探して読み返す**
@@ -84,10 +86,10 @@ MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、
 | 言語 | TypeScript | Worker、取得処理、GitHub連携 |
 | HTTP / MCP | slack-edge / MCP TypeScript SDK | Slack Events API、Interactivity、Streamable HTTP |
 | 実行基盤 | Cloudflare Workers | HTTP受付、Queue consumer、scheduled handler |
-| 非同期処理 | Cloudflare Queues | Slack受付と本文取得・AI処理を分離 |
+| 非同期処理 | Cloudflare Queues | Slack受付と本文取得・AI処理を分離、保存後の翻訳を分離 |
 | 会話・tool状態 | Cloudflare Durable Objects | Slackスレッド単位の会話履歴、owner単位のopaque ref、90日Alarm cleanup |
 | ダイジェスト状態 | Cloudflare D1 / Cron Triggers | 片付け状態、再掲履歴、週次実行 |
-| AI | Vercel AI SDK / Gemini / Cloudflare AI Gateway | 要約、質問応答、保存対象の判断 |
+| AI | Vercel AI SDK / Gemini / Cloudflare AI Gateway | 要約、質問応答、保存対象の判断、保存後の翻訳 |
 | 本文取得 | Qiita Markdown / Zenn API / X API / arXiv LaTeXML HTML / Speaker Deck・ドクセルの構造化データ / Firecrawl | URLごとの本文取得 |
 | 保存 | GitHub App / Contents API | privateリポジトリへのMarkdown保存 |
 | テスト | Vitest / Cloudflare Workers test pool | Worker環境でのユニットテスト |
@@ -155,6 +157,7 @@ pnpm dry-run
 - 週次ダイジェストは「読んだか」ではなく「片付けたか」だけを管理。
 - 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しない。
 - 削除は既定ブランチの先頭からファイルを消すだけで、本文はGitの履歴に残る。取り消しは`git revert`で行う。
+- 翻訳は保存済みの本文を訳文で置き換える形で行い、原文はGitの履歴にだけ残る。訳し漏れたクリップは元の言語のまま残り、訳し直す導線は「同じURLをもう一度送る」だけ。
 
 ## 設計判断
 
@@ -173,3 +176,4 @@ pnpm dry-run
 - [ツール参照をDurable Objectへ90日保持し、BotとMCPで共通化する](docs/adr/0022-persist-tool-refs-in-durable-object.md)
 - [新着一覧をカードと箇条書きに分け、片付けを表示に出す](docs/adr/0023-clip-index-cards-and-dismissed-marks.md)
 - [本文の上限は取得と読み直しで1つにし、保存時の素性を読み直しにも渡す](docs/adr/0026-one-body-limit-for-fetch-and-reread.md)
+- [日本語でないクリップは、保存の後で本文を日本語へ置き換える](docs/adr/0027-translate-clips-into-japanese-after-saving.md)
