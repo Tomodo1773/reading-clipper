@@ -1,4 +1,4 @@
-import { type AnyMessageBlock, SlackAPIClient } from 'slack-edge';
+import { type AnyMessageBlock, type Button, SlackAPIClient } from 'slack-edge';
 import { refreshClipIndexBestEffort } from './clip-index';
 import { selectUndismissed, setClipDismissed } from './clips';
 import type { Env, SavedClip } from './types';
@@ -24,7 +24,7 @@ const MAX_MARKDOWN_CHARS = 12_000;
 /**
  * クリップ1件ぶんのブロックに振る`block_id`の接頭辞。
  *
- * 1件が何ブロックに散るかはメッセージによって違う（ダイジェストは3つ、返信は1つ）。
+ * 1件が何ブロックに散るかはメッセージによって違う（ダイジェストは2つ、返信は1つ）。
  * 接頭辞を共通にしておくことで、押下後の組み直しが両方に効く。
  * パスをそのまま入れない。ファイル名が記事タイトルそのままなので255文字上限を超えうる。
  */
@@ -41,14 +41,20 @@ export function dismissActionBlock(
   return {
     type: 'actions',
     block_id: `${clipBlockId(index)}-act`,
-    elements: [
-      {
-        type: 'button',
-        text: { type: 'plain_text', text: truncate(label, MAX_BUTTON_CHARS) },
-        action_id: DISMISS_ACTION_ID,
-        value: path,
-      },
-    ],
+    elements: [dismissButton(path, label)],
+  };
+}
+
+/**
+ * Dismissのbutton要素。保存直後はactionsに置き、ダイジェストはメタ情報sectionの
+ * accessoryへ置く。入口とvalueは同じまま、表示面だけが居場所を選ぶ（ADR 0028）。
+ */
+export function dismissButton(path: string, label: string = DISMISS_LABEL): Button {
+  return {
+    type: 'button',
+    text: { type: 'plain_text', text: truncate(label, MAX_BUTTON_CHARS) },
+    action_id: DISMISS_ACTION_ID,
+    value: path,
   };
 }
 
@@ -70,11 +76,24 @@ function clipPaths(blocks: AnyMessageBlock[]): Map<string, string> {
   const paths = new Map<string, string>();
   for (const block of blocks) {
     const id = groupId(block);
-    if (id === undefined || block.type !== 'actions') continue;
-    for (const element of block.elements) {
-      if (element.type === 'button' && element.action_id === DISMISS_ACTION_ID && element.value) {
-        paths.set(id, element.value);
+    if (id === undefined) continue;
+    if (block.type === 'actions') {
+      for (const element of block.elements) {
+        if (element.type === 'button' && element.action_id === DISMISS_ACTION_ID && element.value) {
+          paths.set(id, element.value);
+        }
       }
+      continue;
+    }
+    // 新しいダイジェストはボタンをメタ情報sectionのaccessoryへ置く（ADR 0028）。
+    // actionsを読む経路も残し、保存直後の返信と投稿済みの旧ダイジェストを壊さない。
+    if (
+      block.type === 'section' &&
+      block.accessory?.type === 'button' &&
+      block.accessory.action_id === DISMISS_ACTION_ID &&
+      block.accessory.value
+    ) {
+      paths.set(id, block.accessory.value);
     }
   }
   return paths;
