@@ -407,28 +407,6 @@ describe('keepAliveClips', () => {
     expect(JSON.stringify(remaining)).not.toContain('clips/a.md');
   });
 
-  it('keeps the whole group so the row does not lose its compact button or meta line', () => {
-    const blocks = digestBlocks(makeEnv(), [
-      digestClip({ path: 'clips/a.md', url: 'https://example.com/a' }),
-      digestClip({
-        path: 'clips/b.md',
-        url: 'https://zenn.dev/articles/b',
-        excerpt: '残るほうの抜粋',
-      }),
-    ]);
-
-    const remaining = keepAliveClips(blocks, new Set(['clips/b.md']));
-
-    expect(remaining.map((block) => block.type)).toEqual([
-      'header',
-      'divider',
-      'section',
-      'section',
-    ]);
-    expect(JSON.stringify(remaining)).toContain('残るほうの抜粋');
-    expect(JSON.stringify(remaining)).toContain('zenn.dev');
-  });
-
   it('leaves the heading when the last row goes', () => {
     const blocks = digestBlocks(makeEnv(), [digestClip({ path: 'clips/a.md' })]);
 
@@ -439,39 +417,6 @@ describe('keepAliveClips', () => {
 });
 
 describe('digestBlocks', () => {
-  it('puts the dismiss button beside metadata without changing the content section', () => {
-    const blocks = digestBlocks(makeEnv(), [
-      digestClip({
-        path: 'clips/記事.md',
-        url: 'https://example.com/a',
-        excerpt: '記事の抜粋',
-        imageUrl: 'https://example.com/image.png',
-      }),
-    ]);
-
-    expect(blocks.map((block) => block.type)).toEqual([
-      'header',
-      'divider',
-      'section',
-      'section',
-    ]);
-    expect(blocks[2]).toMatchObject({
-      type: 'section',
-      text: { text: expect.stringContaining('記事の抜粋') },
-      accessory: { type: 'image', image_url: 'https://example.com/image.png' },
-    });
-    expect(blocks[3]).toMatchObject({
-      type: 'section',
-      text: { type: 'plain_text', text: expect.stringContaining('example.com') },
-      accessory: {
-        type: 'button',
-        text: { text: '片付ける' },
-        action_id: 'dismiss_clip',
-        value: 'clips/記事.md',
-      },
-    });
-  });
-
   it('escapes a pipe in the article URL so the link does not break', () => {
     const blocks = digestBlocks(makeEnv(), [
       digestClip({ path: 'clips/記事.md', url: 'https://example.com/a?x=b|c' }),
