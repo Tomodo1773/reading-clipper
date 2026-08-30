@@ -187,8 +187,8 @@ describe('weekly digest', () => {
 
     const posted = slack.bodies['chat.postMessage'] as { channel: string; blocks: unknown[] };
     expect(posted.channel).toBe('D123');
-    // 見出しと区切り、そのあとクリップごとに section + actions + context の3ブロック。
-    expect(posted.blocks).toHaveLength(8);
+    // 見出しと区切り、そのあとクリップごとに本文section + メタ情報sectionの2ブロック。
+    expect(posted.blocks).toHaveLength(6);
     // 件数は見出しに持たない。押すたびに数え直すことになるため（ADR 0015）。
     expect(slack.bodies['chat.postMessage']).toMatchObject({ text: '片付いていないクリップが2件' });
     expect(JSON.stringify(posted.blocks[0])).not.toContain('2件');
@@ -205,9 +205,18 @@ describe('weekly digest', () => {
     expect(JSON.stringify(groups['clip-1'])).toContain('https://zenn.dev/alice/articles/1');
     // メタ行にはホストと保存時期を出す。ホストは保存先パスではなく`url`から取る（ADR 0013）。
     // mrkdwnにするとSlackが`<http://zenn.dev|zenn.dev>`へ変えてしまうのでplain_textで出す。
-    const meta = groups['clip-1']?.[2] as { type: string; elements: { type: string; text: string }[] };
-    expect(meta.type).toBe('context');
-    expect(meta.elements[0]).toEqual({ type: 'plain_text', text: 'zenn.dev ・ 2026年8月に保存' });
+    const meta = groups['clip-1']?.[1] as {
+      type: string;
+      text: { type: string; text: string };
+      accessory: { type: string; action_id: string; value: string };
+    };
+    expect(meta.type).toBe('section');
+    expect(meta.text).toEqual({ type: 'plain_text', text: 'zenn.dev ・ 2026年8月に保存' });
+    expect(meta.accessory).toMatchObject({
+      type: 'button',
+      action_id: 'dismiss_clip',
+      value: 'clips/ファイル名.md',
+    });
 
     // スレッドの文脈に一覧が残るので、「2番目のやつ片付けて」をAIが解決できる。
     expect(thread.names).toEqual(['D123:1700000000.000100']);
@@ -242,10 +251,13 @@ describe('weekly digest', () => {
       type: 'image',
       image_url: 'https://img.example.com/1.png',
     });
-    // ボタンはaccessoryを画像に譲るので、actionsブロックへ出る。
-    const actions = groupsOf(posted.blocks)['clip-0']?.[1] as { type: string; elements: unknown[] };
-    expect(actions.type).toBe('actions');
-    expect(JSON.stringify(actions.elements)).toContain('dismiss_clip');
+    // 本文sectionの画像は維持し、ボタンは次のメタ情報sectionのaccessoryへ置く（ADR 0028）。
+    const meta = groupsOf(posted.blocks)['clip-0']?.[1] as {
+      type: string;
+      accessory?: Record<string, unknown>;
+    };
+    expect(meta.type).toBe('section');
+    expect(meta.accessory).toMatchObject({ type: 'button', action_id: 'dismiss_clip' });
   });
 
   it('drops an unreachable thumbnail but still posts the digest', async () => {
@@ -390,12 +402,12 @@ describe('keepAliveClips', () => {
     const remaining = keepAliveClips(blocks, new Set(['clips/b.md']));
 
     // 見出しと区切りはクリップの組に属さないので、そのまま残る。
-    expect(remaining).toHaveLength(5);
+    expect(remaining).toHaveLength(4);
     expect(JSON.stringify(remaining)).toContain('clips/b.md');
     expect(JSON.stringify(remaining)).not.toContain('clips/a.md');
   });
 
-  it('keeps the whole group so the row does not lose its button or meta line', () => {
+  it('keeps the whole group so the row does not lose its compact button or meta line', () => {
     const blocks = digestBlocks(makeEnv(), [
       digestClip({ path: 'clips/a.md', url: 'https://example.com/a' }),
       digestClip({
@@ -411,8 +423,7 @@ describe('keepAliveClips', () => {
       'header',
       'divider',
       'section',
-      'actions',
-      'context',
+      'section',
     ]);
     expect(JSON.stringify(remaining)).toContain('残るほうの抜粋');
     expect(JSON.stringify(remaining)).toContain('zenn.dev');
@@ -428,6 +439,39 @@ describe('keepAliveClips', () => {
 });
 
 describe('digestBlocks', () => {
+  it('puts the dismiss button beside metadata without changing the content section', () => {
+    const blocks = digestBlocks(makeEnv(), [
+      digestClip({
+        path: 'clips/記事.md',
+        url: 'https://example.com/a',
+        excerpt: '記事の抜粋',
+        imageUrl: 'https://example.com/image.png',
+      }),
+    ]);
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      'header',
+      'divider',
+      'section',
+      'section',
+    ]);
+    expect(blocks[2]).toMatchObject({
+      type: 'section',
+      text: { text: expect.stringContaining('記事の抜粋') },
+      accessory: { type: 'image', image_url: 'https://example.com/image.png' },
+    });
+    expect(blocks[3]).toMatchObject({
+      type: 'section',
+      text: { type: 'plain_text', text: expect.stringContaining('example.com') },
+      accessory: {
+        type: 'button',
+        text: { text: '片付ける' },
+        action_id: 'dismiss_clip',
+        value: 'clips/記事.md',
+      },
+    });
+  });
+
   it('escapes a pipe in the article URL so the link does not break', () => {
     const blocks = digestBlocks(makeEnv(), [
       digestClip({ path: 'clips/記事.md', url: 'https://example.com/a?x=b|c' }),

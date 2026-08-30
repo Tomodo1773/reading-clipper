@@ -145,8 +145,8 @@ describe('ダイジェストのボタン押下', () => {
     const update = updates[0]!;
     expect(update.channel).toBe('D123');
     expect(update.ts).toBe('1700000000.000100');
-    // 見出しと区切り、残った1件ぶんの3ブロック。
-    expect(update.blocks).toHaveLength(5);
+    // 見出しと区切り、残った1件ぶんの2ブロック。
+    expect(update.blocks).toHaveLength(4);
     expect(JSON.stringify(update.blocks)).not.toContain(CLIP_PATH);
     expect(JSON.stringify(update.blocks)).toContain(OTHER_PATH);
     // 差し替えでもサムネイルを取り直さない。payloadのblocksをそのまま使う。

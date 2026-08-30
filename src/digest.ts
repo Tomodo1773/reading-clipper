@@ -8,7 +8,7 @@ import {
   markDigestShown,
   selectDigestClips,
 } from './clips';
-import { clipBlockId, dismissActionBlock } from './dismiss';
+import { clipBlockId, dismissButton } from './dismiss';
 import { asClipError } from './errors';
 import { getGitHubFile } from './github';
 import type { Env } from './types';
@@ -71,9 +71,9 @@ function headBlocks(count: number): AnyMessageBlock[] {
 }
 
 /**
- * 1件を section（タイトルと抜粋、サムネイル）+ actions（ボタン）+ context（メタ）の
- * 3ブロックで表す（ADR 0011）。`accessory`は1つしか置けないため、サムネイルを出すと
- * ボタンは`actions`へ出さざるを得ない。
+ * 1件を本文section（タイトル・抜粋・サムネイル）+ メタ情報section（ボタンをaccessory）の
+ * 2ブロックで表す（ADR 0028）。本文側はADR 0011のまま触らず、ボタンだけを独立した
+ * actions行からメタ情報の右へ下げる。
  *
  * `block_id`は組を識別するためだけに使う。パスをそのまま入れない。
  * ファイル名が記事タイトルそのままなので、`block_id`の255文字上限を超えうる。
@@ -93,20 +93,17 @@ function clipBlocks(env: Env, clip: DigestClip, index: number): AnyMessageBlock[
   if (clip.imageUrl) {
     section.accessory = { type: 'image', image_url: clip.imageUrl, alt_text: title || 'クリップ' };
   }
+  const metaSection: SectionBlock = {
+    type: 'section',
+    block_id: `${id}-meta`,
+    // clipped_atは必須だが、壊れた日時でもSlackへ空文字を渡さないための最後のフォールバック。
+    text: { type: 'plain_text', text: meta || '保存済み' },
+    accessory: dismissButton(clip.path),
+  };
   return [
     section,
-    dismissActionBlock(index, clip.path),
-    // mrkdwnにするとSlackがホスト名をリンクへ変えて`<http://qiita.com|qiita.com>`になる。
-    // ここに書式は要らないので、自動リンクの効かないplain_textで出す。
-    ...(meta
-      ? [
-          {
-            type: 'context' as const,
-            block_id: `${id}-meta`,
-            elements: [{ type: 'plain_text' as const, text: meta }],
-          },
-        ]
-      : []),
+    // mrkdwnにするとSlackがホスト名をリンクへ変える。書式は要らないのでplain_textにする。
+    metaSection,
   ];
 }
 
