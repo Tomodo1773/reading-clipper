@@ -108,4 +108,34 @@ describe('Core MCP RPC', () => {
       body: 'Service Bindingのrequestをまたいで読む。',
     });
   });
+
+  it('rejects an invalid audit context before rendering the clip page', async () => {
+    const env = makeEnv();
+    await expect(
+      CoreMcpEntrypoint.prototype.clipPage.call({ env } as unknown as CoreMcpEntrypoint, {
+        source: 'web',
+        subject: '',
+      }),
+    ).rejects.toThrow('invalid audit context');
+  });
+
+  it('renders the clip page from D1 without going through the tool contract', async () => {
+    const env = makeEnv();
+    await recordClip(env, {
+      path: 'clips/公開境界.md',
+      url: 'https://example.com/edge',
+      title: '公開境界',
+      excerpt: 'Edgeは認証と受け渡しだけを持つ。',
+      clippedAt: '2026-08-24T00:00:00.000Z',
+    });
+
+    const html = await CoreMcpEntrypoint.prototype.clipPage.call(
+      { env } as unknown as CoreMcpEntrypoint,
+      { source: 'web', subject: 'access-user-123' },
+    );
+
+    expect(html).toContain('<a href="https://example.com/edge">公開境界</a>');
+    expect(html).toContain('Edgeは認証と受け渡しだけを持つ。');
+    expect(html).toContain('保存 1件 · まだ片付けていない 1件');
+  });
 });
