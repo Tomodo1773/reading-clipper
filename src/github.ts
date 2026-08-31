@@ -15,6 +15,8 @@ import {
 
 const GITHUB_API_VERSION = '2022-11-28';
 const CODE_SEARCH_SIZE = 5;
+/** `{ref}:{path}`でサブツリーを名指す。パス側は`clips/`固定なのでエスケープは要らない。 */
+const CLIPS_TREE_REF = 'HEAD:clips';
 
 interface CachedToken {
   cacheKey: string;
@@ -231,6 +233,46 @@ export async function searchGitHubCode(env: Env, query: string): Promise<GitHubC
     if (matches.length === CODE_SEARCH_SIZE) break;
   }
   return matches;
+}
+
+/**
+ * `clips/`直下の保存済みクリップを、二次索引を経由せず一次データから数え上げる（ADR 0031）。
+ *
+ * サブツリーを直接引くのは、ルートの再帰取得だと`clips/`と無関係なディレクトリの増加が
+ * 毎回の取得量へ連動し、Contents APIだと1ディレクトリ1000件の上限に当たるためである。
+ * 返るのは`clips/`を除いたファイル名なので、ここで保存先パスへ戻す。
+ */
+export async function listGitHubClipFiles(env: Env): Promise<string[]> {
+  const token = await getInstallationToken(env);
+  const [owner, name] = repoParts(env.GITHUB_REPO);
+  const response = await fetchWithTimeout(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${CLIPS_TREE_REF}`,
+    { headers: githubHeaders(token) },
+    20_000,
+    'github',
+  );
+  assertOk(response, 'github');
+  const payload = asRecord(await response.json());
+  if (!payload || !Array.isArray(payload.tree)) {
+    throw new ClipError('GitHub clip tree response was invalid', 'github', true);
+  }
+  // 全件を見られていない以上、走査した結果として扱ってはならない（ADR 0031）。
+  // Code Searchの`incomplete_results`と同じ規則である。
+  if (payload.truncated === true) {
+    throw new ClipError('GitHub clip tree was truncated', 'github', true);
+  }
+
+  const paths: string[] = [];
+  for (const value of payload.tree) {
+    const entry = asRecord(value);
+    const fileName = stringField(entry, 'path');
+    if (stringField(entry, 'type') !== 'blob' || !fileName) continue;
+    if (!fileName.toLowerCase().endsWith('.md')) continue;
+    const path = `clips/${fileName}`;
+    if (path === CLIP_INDEX_PATH) continue;
+    paths.push(path);
+  }
+  return paths;
 }
 
 async function getGitHubFilePayload(

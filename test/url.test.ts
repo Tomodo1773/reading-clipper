@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildClipPath, canonicalizeUrl, classifyUrl } from '../src/url';
+import { buildClipPath, canonicalizeUrl, classifyUrl, clipNameMatches } from '../src/url';
 
 describe('URL handling', () => {
   it('canonicalizes known sources without tracking query strings', () => {
@@ -159,5 +159,57 @@ describe('URL handling', () => {
 
   it('falls back when the title leaves nothing usable', () => {
     expect(buildClipPath('  ///  ')).toBe('clips/untitled.md');
+  });
+});
+
+// 保存済みの実データをそのまま固定値にする。抽象的な正規化テストでは、題名とファイル名で
+// 記号が食い違う穴（保存済み39件中9件が該当）を見つけられない（ADR 0031）。
+describe('clipNameMatches', () => {
+  const mercari = 'clips/AI-Native-な開発の実践に向けて-メルカリエンジニアリング.md';
+  const kunpe =
+    'clips/AIに会社の地図を持たせたら、3年目社員のように働き始めた-〜精度とトークン効率を上げるオントロジーの実践〜｜kunpe-(ymdpharm).md';
+  const hatamasa = 'clips/会議でメンバーが黙るのは、当事者意識の問題ではない｜hatamasa.md';
+  const tanstack =
+    'clips/TanStack-Start-+-Hono-+-oRPC-+-Cloudflare-Workersで社内ERPを作った設計と学び.md';
+
+  it('matches a title whose ASCII separator the file name had to drop', () => {
+    // `makeClipFileName`が`|`を空白へ落として`-`へ畳むため、本物の題名とは記号が違う。
+    expect(clipNameMatches(mercari, 'AI-Native な開発の実践に向けて | メルカリエンジニアリング')).toBe(
+      true,
+    );
+  });
+
+  it('matches across the wave dash and the full-width pipe, which NFKC alone leaves apart', () => {
+    // `〜`(U+301C)は`～`(U+FF5E)へ正規化されない。記号を区切りへ落とすことで吸収する。
+    expect(
+      clipNameMatches(
+        kunpe,
+        'AIに会社の地図を持たせたら、3年目社員のように働き始めた 〜精度とトークン効率を上げるオントロジーの実践〜｜kunpe (ymdpharm)',
+      ),
+    ).toBe(true);
+    expect(clipNameMatches(kunpe, 'kunpe ymdpharm')).toBe(true);
+  });
+
+  it('matches the title that the code search index could not find', () => {
+    expect(clipNameMatches(hatamasa, '会議でメンバーが黙るのは、当事者意識の問題ではない｜hatamasa')).toBe(
+      true,
+    );
+    expect(clipNameMatches(hatamasa, '会議 黙る')).toBe(true);
+    expect(clipNameMatches(hatamasa, 'hatamasa')).toBe(true);
+  });
+
+  it('treats hyphens, spaces and plus signs alike, and ignores case', () => {
+    expect(clipNameMatches(tanstack, 'tanstack start hono')).toBe(true);
+    expect(clipNameMatches(tanstack, 'TanStack-Start')).toBe(true);
+  });
+
+  it('requires every term, so an unrelated word rules the clip out', () => {
+    expect(clipNameMatches(mercari, 'メルカリ TiDB')).toBe(false);
+    expect(clipNameMatches(hatamasa, '当事者意識 給与')).toBe(false);
+  });
+
+  it('matches everything when there is no query, so listing shares the path', () => {
+    expect(clipNameMatches(hatamasa, '')).toBe(true);
+    expect(clipNameMatches(hatamasa, '   ')).toBe(true);
   });
 });

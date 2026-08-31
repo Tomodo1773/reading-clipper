@@ -152,3 +152,31 @@ function makeClipFileName(title: string): string {
 export function buildClipPath(title: string): string {
   return `clips/${makeClipFileName(title)}`;
 }
+
+/**
+ * 題名を照合するためのキー。検索語と保存済みファイル名の**両方**へ同じものを掛ける（ADR 0031）。
+ *
+ * `makeClipFileName`の逆写像ではない。ファイル名は`<>:"/\|?*`を空白へ置換してから`-`へ
+ * 畳むので、利用者が本物の題名をそのまま貼ると記号が食い違う。記号をすべて区切りへ落とせば、
+ * その差も全角・半角の揺れ（`｜`と`|`）も吸収できる。NFKCだけでは足りない。
+ * `〜`(U+301C)と`～`(U+FF5E)はNFKCで統一されず、保存済みのファイル名に前者が現れる。
+ */
+export function clipNameKey(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
+    .trim();
+}
+
+/**
+ * 保存先パスのファイル名が、検索語のすべてを含むか（ADR 0031）。
+ * 検索語が空なら真を返す。絞り込み無しの列挙が同じ経路を通る。
+ */
+export function clipNameMatches(path: string, query: string): boolean {
+  const key = clipNameKey((path.split('/').pop() ?? path).replace(/\.md$/iu, ''));
+  return clipNameKey(query)
+    .split(' ')
+    .filter(Boolean)
+    .every((term) => key.includes(term));
+}

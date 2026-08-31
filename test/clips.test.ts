@@ -278,13 +278,13 @@ describe('clipTitle', () => {
   it('reads a title out of the path when the row has none', () => {
     // バックフィル由来の行は`title`を持たない（ADR 0010）。
     expect(
-      clipTitle({ path: 'clips/題名の無い記事.md', title: null, url: null, clippedAt: '' }),
+      clipTitle({ path: 'clips/題名の無い記事.md', title: null }),
     ).toBe('題名の無い記事');
   });
 
   it('prefers the stored title, which keeps what the file name had to drop', () => {
     expect(
-      clipTitle({ path: 'clips/Worker-設計.md', title: 'Worker/設計', url: null, clippedAt: '' }),
+      clipTitle({ path: 'clips/Worker-設計.md', title: 'Worker/設計' }),
     ).toBe('Worker/設計');
   });
 });

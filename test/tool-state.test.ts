@@ -61,11 +61,27 @@ describe('ToolState', () => {
     expect(await stub.resolveLoaded(ref)).toEqual({ ok: false, error: 'unknown_ref' });
   });
 
+  it('issues one ref per candidate in a single call, each resolvable on its own', async () => {
+    // 検索も一覧も複数の候補を返すので、単発の口を残さない（ADR 0031）。
+    const stub = state('tool-state-put-clips');
+    const payloads = [
+      { path: 'clips/一件目.md', title: '一件目' },
+      { path: 'clips/二件目.md', title: '二件目' },
+    ];
+
+    const refs = await stub.putClips(payloads);
+    expect(refs).toHaveLength(2);
+    expect(new Set(refs).size).toBe(2);
+    expect(await stub.resolveClip(refs[0]!)).toEqual({ ok: true, payload: payloads[0] });
+    expect(await stub.resolveClip(refs[1]!)).toEqual({ ok: true, payload: payloads[1] });
+    expect(await stub.putClips([])).toEqual([]);
+  });
+
   it('reschedules the alarm to the next remaining expiry', async () => {
     const stub = state('tool-state-alarm-reschedule');
     await stub.putLoaded(content, '2026-08-24T00:00:00.000Z');
-    await stub.putClip(
-      { path: 'clips/later.md', title: 'later' },
+    await stub.putClips(
+      [{ path: 'clips/later.md', title: 'later' }],
       '2026-08-25T00:00:00.000Z',
     );
 

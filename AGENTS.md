@@ -21,13 +21,13 @@
 | `src/ai.ts` | モデルのprovider生成と、モデル呼び出しの失敗分類。会話と翻訳で共有します |
 | `src/chat.ts` | AI SDKでのモデル呼び出し1ターン |
 | `src/tool-contract.ts` | BotとMCP Edgeで共有するツール名・schema・説明 |
-| `src/tools.ts` | 共通ツール処理とAI SDK adapter（読む／保存する／探す／消す） |
+| `src/tools.ts` | 共通ツール処理とAI SDK adapter（読む／保存する／一覧する／探す／消す） |
 | `src/core-rpc.ts` / `src/mcp-edge.ts` | Service Binding RPCと公開境界（`/mcp`と閲覧ページ`/clips`）。Edgeは認証と受け渡しだけを持ち、画面はCoreが組み立てます |
 | `src/tool-state.ts` / `src/retention.ts` | owner単位のopaque refと90日Alarm cleanup |
 | `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
 | `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / arXiv / Speaker Deck / ドクセル / Firecrawl）。サイト固有の変換ルールもここに置きます |
 | `src/html-markdown.ts` | 意味づけの残るHTMLをMarkdownへ戻す共有の変換器。**特定のサイトを知りません**。サイト固有の要素は呼び出し側からルールとして渡します |
-| `src/url.ts` | canonical化、種別判定、保存先パスの決定 |
+| `src/url.ts` | canonical化、種別判定、保存先パスの決定、題名の照合キー |
 | `src/github.ts` | GitHub App認証、Code SearchとContents API |
 | `src/front-matter.ts` | 保存済みMarkdownのフロントマターをWorkerとバックフィルで共通して読む |
 | `src/markdown.ts` | 保存するMarkdownの組み立て |

@@ -42,11 +42,21 @@ export class ToolState extends DurableObject<Env> {
   }
 
   async putLoaded(content: FetchedContent, createdAt = new Date().toISOString()): Promise<string> {
-    return this.put('loaded', content, createdAt);
+    const [ref] = await this.put('loaded', [content], createdAt);
+    return ref as string;
   }
 
-  async putClip(payload: ClipRefPayload, createdAt = new Date().toISOString()): Promise<string> {
-    return this.put('clip', payload, createdAt);
+  /**
+   * 候補のぶんだけrefをまとめて発行する。1件ずつ発行する口は持たない。
+   *
+   * 検索も一覧も複数の候補を一度に返すため、単発の口を残すと呼び出し側が件数ぶんの
+   * RPC往復を作れてしまう（ADR 0031）。
+   */
+  async putClips(
+    payloads: ClipRefPayload[],
+    createdAt = new Date().toISOString(),
+  ): Promise<string[]> {
+    return this.put('clip', payloads, createdAt);
   }
 
   resolveLoaded(ref: string, now = new Date().toISOString()): ResolveRefResult<FetchedContent> {
@@ -61,19 +71,27 @@ export class ToolState extends DurableObject<Env> {
     await this.deleteExpiredAndSchedule();
   }
 
-  private async put(kind: ToolRefKind, payload: ToolRefPayload, createdAt: string): Promise<string> {
-    const ref = crypto.randomUUID();
-    this.ctx.storage.sql.exec(
-      `INSERT INTO tool_refs (ref, kind, payload_json, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      ref,
-      kind,
-      JSON.stringify(payload),
-      createdAt,
-      expiresAt(createdAt),
-    );
-    await this.scheduleNextAlarm();
-    return ref;
+  private async put(
+    kind: ToolRefKind,
+    payloads: ToolRefPayload[],
+    createdAt: string,
+  ): Promise<string[]> {
+    const expires = expiresAt(createdAt);
+    const refs = payloads.map((payload) => {
+      const ref = crypto.randomUUID();
+      this.ctx.storage.sql.exec(
+        `INSERT INTO tool_refs (ref, kind, payload_json, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        ref,
+        kind,
+        JSON.stringify(payload),
+        createdAt,
+        expires,
+      );
+      return ref;
+    });
+    if (refs.length > 0) await this.scheduleNextAlarm();
+    return refs;
   }
 
   private resolve<T>(ref: string, kind: ToolRefKind, now: string): ResolveRefResult<T> {

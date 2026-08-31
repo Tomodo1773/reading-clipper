@@ -4,6 +4,7 @@ import type { CoreToolName } from './tool-contract';
 import {
   deleteClipTool,
   findClipsTool,
+  listClipsTool,
   loadContentTool,
   readClipTool,
   saveLoadedTool,
@@ -57,6 +58,8 @@ export class CoreMcpEntrypoint extends WorkerEntrypoint<Env> {
         return setClipDismissedTool(this.env, receivedAt, call.args);
       case 'find_clips':
         return findClipsTool(this.env, ownerId, call.args);
+      case 'list_clips':
+        return listClipsTool(this.env, ownerId, call.args);
       case 'read_clip':
         return readClipTool(this.env, ownerId, call.args);
       case 'delete_clip':

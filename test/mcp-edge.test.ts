@@ -141,6 +141,7 @@ describe('MCP Edge protocol', () => {
     expect(payload.result?.tools?.map((tool) => tool.name)).toEqual([
       'load_content',
       'save_loaded',
+      'list_clips',
       'find_clips',
       'read_clip',
       'delete_clip',
