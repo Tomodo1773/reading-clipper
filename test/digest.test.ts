@@ -71,7 +71,8 @@ function mockSlack(github: GitHubState = {}): SlackCalls {
       if (github.missing?.includes(path)) return jsonResponse({ message: 'Not Found' }, 404);
       return jsonResponse({
         sha: 'file-sha',
-        html_url: `https://github.com/example/clips/blob/main/${path}`,
+        // 既定ブランチ名を組み立てず、GitHubの応答をそのまま使うことも検証する。
+        html_url: `https://github.com/example/clips/blob/trunk/${path}`,
       });
     }
     if (url.startsWith('https://img.example.com/')) {
@@ -197,12 +198,15 @@ describe('weekly digest', () => {
     expect(Object.keys(groups)).toEqual(['clip-0', 'clip-1']);
     // urlがNULLの行（バックフィル由来）はGitHubのファイルへリンクする。
     expect(JSON.stringify(groups['clip-0'])).toContain(
-      'https://github.com/example/clips/blob/main/clips/',
+      'https://github.com/example/clips/blob/trunk/clips/',
     );
     // タイトルが列にあればそれを使う。パス末尾はファイル名として削られている。
     expect(JSON.stringify(groups['clip-1'])).toContain('保存した記事');
     expect(JSON.stringify(groups['clip-1'])).toContain('本文の書き出しがここに入る。');
     expect(JSON.stringify(groups['clip-1'])).toContain('https://zenn.dev/alice/articles/1');
+    expect(JSON.stringify(groups['clip-1'])).toContain(
+      'https://github.com/example/clips/blob/trunk/clips/ファイル名.md|GitHub版',
+    );
     // メタ行にはホストと保存時期を出す。ホストは保存先パスではなく`url`から取る（ADR 0013）。
     // mrkdwnにするとSlackが`<http://zenn.dev|zenn.dev>`へ変えてしまうのでplain_textで出す。
     const meta = groups['clip-1']?.[1] as {
@@ -301,7 +305,7 @@ describe('weekly digest', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       // 実在確認はここでは主題ではないので、素直に「残っている」を返す。
-      // 投げさせて`stillOnGitHub`に握り潰させると、このテストが通る理由が濁る。
+      // ここで失敗させると実在確認のフォールバックまで混ざり、このテストが通る理由が濁る。
       if (url.includes('/app/installations/')) {
         return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
       }
@@ -423,5 +427,33 @@ describe('digestBlocks', () => {
     ]);
 
     expect(JSON.stringify(blocks)).toContain('https://example.com/a?x=b%7Cc|記事');
+  });
+
+  it('keeps the title on the source and adds a GitHub copy link', () => {
+    const blocks = digestBlocks(makeEnv(), [
+      digestClip({
+        path: 'clips/Worker 設計.md',
+        url: 'https://example.com/article',
+        githubUrl: 'https://github.com/example/clips/blob/trunk/clips/Worker%20%E8%A8%AD%E8%A8%88.md',
+      }),
+    ]);
+
+    const rendered = JSON.stringify(blocks);
+    expect(rendered).toContain('https://example.com/article|Worker 設計');
+    expect(rendered).toContain(
+      'https://github.com/example/clips/blob/trunk/clips/Worker%20%E8%A8%AD%E8%A8%88.md|GitHub版',
+    );
+  });
+
+  it('does not duplicate the GitHub link when there is no source URL', () => {
+    const blocks = digestBlocks(makeEnv(), [
+      digestClip({
+        path: 'clips/記事.md',
+        url: null,
+        githubUrl: 'https://github.com/example/clips/blob/trunk/clips/article.md',
+      }),
+    ]);
+
+    expect(JSON.stringify(blocks).match(/github\.com/g)).toHaveLength(1);
   });
 });
