@@ -51,7 +51,7 @@ export interface RecentClip extends DigestClip {
  * ADR 0005でファイル名を記事タイトルそのものにしたので、`title`が無い行（バックフィル由来）
  * でもパスから読める題名が取れる。ただし長い題名はファイル名にした時点で削られている。
  */
-export function clipTitle(clip: ClipRow): string {
+export function clipTitle(clip: Pick<ClipRow, 'path' | 'title'>): string {
   if (clip.title) return clip.title;
   return (clip.path.split('/').pop() ?? clip.path).replace(/\.md$/, '');
 }

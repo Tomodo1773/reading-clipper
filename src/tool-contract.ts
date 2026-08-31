@@ -20,19 +20,35 @@ export const coreToolSchemas = {
   find_clips: z.object({
     query: z.string().trim().min(1).max(120).describe('題名・URL・本文に含まれる検索語。'),
   }),
+  list_clips: z.object({
+    title_query: z
+      .string()
+      .trim()
+      .min(1)
+      .max(120)
+      .optional()
+      .describe('題名に含まれる語。空白区切りで全部を含むものに絞る。省略すると全件が対象。'),
+  }),
   read_clip: z.object({
-    clip_ref: z.string().min(1).describe('find_clipsが返したopaqueなclip_ref。'),
+    clip_ref: z.string().min(1).describe('find_clipsまたはlist_clipsが返したopaqueなclip_ref。'),
   }),
   delete_clip: z.object({
-    clip_ref: z.string().min(1).describe('find_clipsが返したopaqueなclip_ref。'),
+    clip_ref: z.string().min(1).describe('find_clipsまたはlist_clipsが返したopaqueなclip_ref。'),
   }),
 } as const;
 
 export type CoreToolName = keyof typeof coreToolSchemas;
 
+/**
+ * `list_clips`が項目を返す上限（ADR 0031）。ガードではなく機能上限で、有限の寿命を持つ。
+ * モデルへ渡す説明文がこの値を名指すので、契約としてここに1つだけ置く。
+ */
+export const LIST_CLIPS_LIMIT = 100;
+
 export const coreToolNames = [
   'load_content',
   'save_loaded',
+  'list_clips',
   'find_clips',
   'read_clip',
   'delete_clip',
@@ -47,9 +63,11 @@ export const coreToolDescriptions: Record<CoreToolName, string> = {
   set_clip_dismissed:
     'D1に実在する保存済みクリップへ「片付けた」印を付ける、または外す。1回につき1件。',
   find_clips:
-    '保存済みクリップを題名・URL・本文から最大5件探し、読取・削除に使うopaqueなclip_refを返す。',
+    '保存済みクリップを本文から最大5件探し、読取・削除に使うopaqueなclip_refを返す。GitHubのコード検索索引に依存するため、0件は保存されていないことの根拠にならない。題名で在否を確かめるときはlist_clipsを使う。',
+  list_clips:
+    `保存済みクリップをGitHubのファイル一覧から直接引く。検索索引を経由しないので、matchedが返っていれば全件を走査した結果である。title_queryを省略すると全件が対象。matchedが0なら、その題名のクリップは保存されていない。該当が${LIST_CLIPS_LIMIT}件を超えるときは項目を返さずtoo_manyを返すので、語を足して絞る。長い題名はファイル名が255バイトで切り詰められるため、末尾の語では引けないことがある。本文は見ないのでsnippetとgithub_urlは返さない。`,
   read_clip:
-    'find_clipsが返したclip_refの現在の本文をGitHubから読む。検索snippetだけを本文の根拠にしない。保存時の素性も返す。fetch_completeがfalseなら本文は取り切れていないので、そのつもりで扱う。',
+    'find_clipsまたはlist_clipsが返したclip_refの現在の本文をGitHubから読む。検索snippetだけを本文の根拠にしない。保存時の素性も返す。fetch_completeがfalseなら本文は取り切れていないので、そのつもりで扱う。',
   delete_clip:
-    'find_clipsが返したclip_refのクリップ1件をGitHubとD1から削除する。Git履歴から復元できる。',
+    'find_clipsまたはlist_clipsが返したclip_refのクリップ1件をGitHubとD1から削除する。Git履歴から復元できる。',
 };

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createGitHubAppJwt, resetGitHubTokenCache, searchGitHubCode } from '../src/github';
+import {
+  createGitHubAppJwt,
+  listGitHubClipFiles,
+  resetGitHubTokenCache,
+  searchGitHubCode,
+} from '../src/github';
 import { generateGitHubAppKeyPair, jsonResponse, makeEnv } from './helpers';
 
 afterEach(() => {
@@ -118,5 +123,56 @@ describe('GitHub Code Search', () => {
     await expect(
       searchGitHubCode(makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }), '設計'),
     ).rejects.toMatchObject({ message: 'GitHub code search returned incomplete results' });
+  });
+});
+
+describe('GitHub clip tree', () => {
+  function mockTree(payload: unknown, privateKeyPem: string) {
+    const requested: { url?: URL } = {};
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.includes('/app/installations/')) {
+        return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' }, 201);
+      }
+      if (url.pathname.endsWith('/git/trees/HEAD:clips')) {
+        requested.url = url;
+        return jsonResponse(payload);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    return { requested, env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }) };
+  }
+
+  it('restores the clips/ prefix and drops everything that is not a saved clip', async () => {
+    const { privateKeyPem } = await generateGitHubAppKeyPair();
+    const { requested, env } = mockTree(
+      {
+        truncated: false,
+        tree: [
+          { path: '会議でメンバーが黙るのは、当事者意識の問題ではない｜hatamasa.md', type: 'blob', sha: 'a' },
+          { path: 'README.md', type: 'blob', sha: 'b' },
+          { path: 'cover.png', type: 'blob', sha: 'c' },
+          { path: 'drafts', type: 'tree', sha: 'd' },
+        ],
+      },
+      privateKeyPem,
+    );
+
+    await expect(listGitHubClipFiles(env)).resolves.toEqual([
+      'clips/会議でメンバーが黙るのは、当事者意識の問題ではない｜hatamasa.md',
+    ]);
+    // サブツリーを名指すので、リポジトリ全体の再帰取得にはならない。
+    expect(requested.url?.pathname).toBe('/repos/example/clips/git/trees/HEAD:clips');
+    expect(requested.url?.search).toBe('');
+  });
+
+  it('fails instead of reporting a partial scan when the tree is truncated', async () => {
+    const { privateKeyPem } = await generateGitHubAppKeyPair();
+    // 全件を見ていない以上、走査した結果として扱ってはならない（ADR 0031）。
+    const { env } = mockTree({ truncated: true, tree: [{ path: 'a.md', type: 'blob', sha: 'a' }] }, privateKeyPem);
+    await expect(listGitHubClipFiles(env)).rejects.toMatchObject({
+      message: 'GitHub clip tree was truncated',
+      stage: 'github',
+    });
   });
 });

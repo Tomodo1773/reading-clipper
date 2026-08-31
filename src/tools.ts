@@ -8,7 +8,6 @@ import {
   type FoundClip,
   recordClip,
   selectClipsByPath,
-  type ClipRow,
 } from './clips';
 import { applyClipDismissal } from './dismiss';
 import { logFailure } from './errors';
@@ -19,6 +18,7 @@ import {
   deleteGitHubFile,
   getGitHubFile,
   getGitHubTextFile,
+  listGitHubClipFiles,
   putGitHubFile,
   searchGitHubCode,
 } from './github';
@@ -26,11 +26,12 @@ import { renderClipMarkdown } from './markdown';
 import {
   coreToolDescriptions,
   coreToolSchemas,
+  LIST_CLIPS_LIMIT,
 } from './tool-contract';
 import type { ClipRefPayload } from './tool-state';
 import { queueTranslation } from './translate';
 import type { Env, FetchedContent } from './types';
-import { buildClipPath } from './url';
+import { buildClipPath, clipNameMatches } from './url';
 
 /**
  * フロントマターの真偽値を読む。GitHub上へ手で置かれたファイルなど、書かれていないこともある。
@@ -42,9 +43,12 @@ function frontMatterFlag(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
-interface SearchClip extends ClipRow {
-  dismissed: boolean | null;
-  githubUrl: string;
+/** 保存先パスと、あれば台帳の注釈。検索と一覧が同じ形でrefの発行へ渡す。 */
+interface ClipCandidate {
+  path: string;
+  annotation?: FoundClip;
+  /** Code Searchが返した保存済みMarkdownのURL。一覧側は持たない（ADR 0031）。 */
+  githubUrl?: string;
   snippet?: string;
 }
 
@@ -53,26 +57,57 @@ function searchSnippet(value: string | undefined): string | undefined {
   return text ? text.slice(0, 240) : undefined;
 }
 
-async function findSavedClips(env: Env, query: string): Promise<SearchClip[]> {
-  const matches = await searchGitHubCode(env, query);
-  let annotations = new Map<string, FoundClip>();
+/**
+ * 候補へ台帳の注釈を足す。台帳が落ちても候補そのものは返す（ADR 0020）。
+ * D1は母集団ではないので、行が無いことを候補から落とす理由にしない。
+ */
+async function annotateClips(
+  env: Env,
+  tool: string,
+  paths: string[],
+): Promise<Map<string, FoundClip>> {
   try {
-    annotations = await selectClipsByPath(env, matches.map((match) => match.path));
+    return await selectClipsByPath(env, paths);
   } catch (error) {
-    logFailure(error, 'clips', 'find_clips_annotations');
+    logFailure(error, 'clips', `${tool}_annotations`);
+    return new Map();
   }
-  return matches.map((match) => {
-    const annotation = annotations.get(match.path);
-    return {
-      path: match.path,
-      title: annotation?.title ?? null,
-      url: annotation?.url ?? null,
-      clippedAt: annotation?.clippedAt ?? '',
-      dismissed: annotation ? annotation.dismissedAt !== null : null,
-      githubUrl: match.htmlUrl,
-      snippet: searchSnippet(match.snippet),
-    };
-  });
+}
+
+/**
+ * `clipped_at`の新しい順、同着はパス昇順。`selectRecentClips`と同じ規則で、
+ * 台帳に行が無いクリップは`clippedAt`を持たないため末尾に来る（ADR 0031）。
+ */
+function byRecency(a: ClipCandidate, b: ClipCandidate): number {
+  const left = a.annotation?.clippedAt ?? '';
+  const right = b.annotation?.clippedAt ?? '';
+  if (left !== right) return left < right ? 1 : -1;
+  return a.path < b.path ? -1 : 1;
+}
+
+/** 候補へまとめてrefを発行し、ツールの返り値の形にする。検索と一覧で共通。 */
+async function toFoundClips(env: Env, ownerId: string, candidates: ClipCandidate[]) {
+  // 0件でDurable Objectへ往復しない。検索が空を返すのは日常的な経路である。
+  if (candidates.length === 0) return [];
+  const state = env.TOOL_STATE.get(env.TOOL_STATE.idFromName(ownerId));
+  const clips = candidates.map((candidate) => ({
+    ...candidate,
+    title: clipTitle({ path: candidate.path, title: candidate.annotation?.title ?? null }),
+  }));
+  const refs = await state.putClips(
+    clips.map(({ path, title }): ClipRefPayload => ({ path, title })),
+  );
+  return clips.map((clip, index) => ({
+    // `putClips`は渡した数だけ順番どおりに返す。
+    clip_ref: refs[index] as string,
+    path: clip.path,
+    title: clip.title,
+    url: clip.annotation?.url ?? undefined,
+    github_url: clip.githubUrl,
+    clipped_at: clip.annotation?.clippedAt || undefined,
+    dismissed: clip.annotation ? clip.annotation.dismissedAt !== null : null,
+    snippet: clip.snippet,
+  }));
 }
 
 async function saveLoaded(
@@ -165,28 +200,52 @@ export async function setClipDismissedTool(env: Env, receivedAt: string, rawArgs
 
 export async function findClipsTool(env: Env, ownerId: string, rawArgs: unknown) {
   const { query } = coreToolSchemas.find_clips.parse(rawArgs);
-  const state = env.TOOL_STATE.get(env.TOOL_STATE.idFromName(ownerId));
   try {
-    const clips = await findSavedClips(env, query);
-    const found = await Promise.all(
-      clips.map(async (clip) => {
-        const payload: ClipRefPayload = { path: clip.path, title: clipTitle(clip) };
-        return {
-          clip_ref: await state.putClip(payload),
-          path: clip.path,
-          title: payload.title,
-          url: clip.url ?? undefined,
-          github_url: clip.githubUrl,
-          clipped_at: clip.clippedAt || undefined,
-          dismissed: clip.dismissed,
-          snippet: clip.snippet,
-        };
-      }),
+    const matches = await searchGitHubCode(env, query);
+    const annotations = await annotateClips(env, 'find_clips', matches.map((match) => match.path));
+    const found = await toFoundClips(
+      env,
+      ownerId,
+      matches.map((match) => ({
+        path: match.path,
+        annotation: annotations.get(match.path),
+        githubUrl: match.htmlUrl,
+        snippet: searchSnippet(match.snippet),
+      })),
     );
     return { found };
   } catch (error) {
     return { found: [], failed_at: logFailure(error, 'github', 'find_clips') };
   }
+}
+
+/**
+ * 題名での在否確認（ADR 0031）。母集団はGitHubのファイル一覧で、二次索引を経由しない。
+ *
+ * 成功時にだけ`matched`を返すのが契約の本体である。`matched`があることが全件を
+ * 走査した証拠になり、`matched === 0`は「保存されていない」という事実として使える。
+ * 失敗時は`matched`を返さないので、0件と見に行けなかったことが形として別物になる。
+ */
+export async function listClipsTool(env: Env, ownerId: string, rawArgs: unknown) {
+  const { title_query: titleQuery } = coreToolSchemas.list_clips.parse(rawArgs);
+  let paths: string[];
+  try {
+    paths = await listGitHubClipFiles(env);
+  } catch (error) {
+    return { found: [], failed_at: logFailure(error, 'github', 'list_clips') };
+  }
+
+  const matched = paths.filter((path) => clipNameMatches(path, titleQuery ?? ''));
+  // 任意の一部を返すと、それが全部だと誤らせる。切らずに件数だけを返す（ADR 0031）。
+  if (matched.length > LIST_CLIPS_LIMIT) {
+    return { found: [], matched: matched.length, too_many: true };
+  }
+
+  const annotations = await annotateClips(env, 'list_clips', matched);
+  const candidates = matched
+    .map((path) => ({ path, annotation: annotations.get(path) }))
+    .sort(byRecency);
+  return { found: await toFoundClips(env, ownerId, candidates), matched: matched.length };
 }
 
 export async function readClipTool(env: Env, ownerId: string, rawArgs: unknown) {
@@ -249,6 +308,7 @@ export type CoreToolResult = Awaited<
     | typeof saveLoadedTool
     | typeof setClipDismissedTool
     | typeof findClipsTool
+    | typeof listClipsTool
     | typeof readClipTool
     | typeof deleteClipTool
   >
@@ -282,6 +342,11 @@ export function createTools(
       description: coreToolDescriptions.find_clips,
       inputSchema: coreToolSchemas.find_clips,
       execute: (args) => findClipsTool(env, ownerId, args),
+    }),
+    list_clips: tool({
+      description: coreToolDescriptions.list_clips,
+      inputSchema: coreToolSchemas.list_clips,
+      execute: (args) => listClipsTool(env, ownerId, args),
     }),
     read_clip: tool({
       description: coreToolDescriptions.read_clip,

@@ -139,3 +139,120 @@ describe('Core MCP RPC', () => {
     expect(html).toContain('保存 1件 · まだ片付けていない 1件');
   });
 });
+
+describe('list_clips', () => {
+  const audit = { source: 'mcp' as const, subject: 'subject' };
+
+  function mockTree(fileNames: string[], options: { fail?: boolean } = {}) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.includes('/app/installations/')) {
+        return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' }, 201);
+      }
+      if (url.pathname.endsWith('/git/trees/HEAD:clips')) {
+        if (options.fail) return jsonResponse({ message: 'Bad credentials' }, 401);
+        return jsonResponse({
+          truncated: false,
+          tree: fileNames.map((path) => ({ path, type: 'blob', sha: path })),
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const env = makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem });
+    return { env, core: { env } as unknown as CoreMcpEntrypoint };
+  }
+
+  function call(core: CoreMcpEntrypoint, args: unknown) {
+    return CoreMcpEntrypoint.prototype.callTool.call(core, audit, { name: 'list_clips', args });
+  }
+
+  it('lists every clip newest first, keeping the ones D1 never recorded', async () => {
+    const { env, core } = mockTree(['古い記事.md', '新しい記事.md', '台帳に無い記事.md']);
+    await recordClip(env, {
+      path: 'clips/古い記事.md',
+      url: 'https://example.com/old',
+      title: '古い記事',
+      excerpt: '',
+      clippedAt: '2026-08-01T00:00:00.000Z',
+    });
+    await recordClip(env, {
+      path: 'clips/新しい記事.md',
+      url: 'https://example.com/new',
+      title: '新しい記事',
+      excerpt: '',
+      clippedAt: '2026-08-20T00:00:00.000Z',
+    });
+
+    const result = await call(core, {});
+    expect(result).toMatchObject({ matched: 3 });
+    const found = 'found' in result && Array.isArray(result.found) ? result.found : [];
+    // 台帳に行が無いクリップも母集団から落とさない。順序は`clipped_at DESC, path ASC`。
+    expect(found.map((clip) => clip.path)).toEqual([
+      'clips/新しい記事.md',
+      'clips/古い記事.md',
+      'clips/台帳に無い記事.md',
+    ]);
+    expect(found[2]).toMatchObject({ title: '台帳に無い記事', dismissed: null });
+    expect(found[0]).toMatchObject({ url: 'https://example.com/new', dismissed: false });
+    // 本文を見ていないので、検索と違いsnippetとgithub_urlは持たない。
+    expect(found[0]?.snippet).toBeUndefined();
+    expect(found[0]?.github_url).toBeUndefined();
+    expect(found[0]?.clip_ref).toEqual(expect.any(String));
+  });
+
+  it('finds the clip by its title even though the code search index is not consulted', async () => {
+    const { core } = mockTree([
+      '会議でメンバーが黙るのは、当事者意識の問題ではない｜hatamasa.md',
+      'AI時代の強いチームの作り方.md',
+    ]);
+    const result = await call(core, { title_query: '会議 黙る' });
+    expect(result).toMatchObject({ matched: 1 });
+    const found = 'found' in result && Array.isArray(result.found) ? result.found : [];
+    expect(found[0]?.path).toBe('clips/会議でメンバーが黙るのは、当事者意識の問題ではない｜hatamasa.md');
+  });
+
+  it('reports a scanned zero, which is a fact that the clip is not saved', async () => {
+    const { core } = mockTree(['AI時代の強いチームの作り方.md']);
+    const result = await call(core, { title_query: '存在しない題名' });
+    expect(result).toEqual({ found: [], matched: 0 });
+    expect(result).not.toHaveProperty('failed_at');
+  });
+
+  it('still returns the items when the match count sits exactly on the limit', async () => {
+    // 境界を`>`で判定している。`>=`にすると、ちょうど上限のときに黙って項目が消える。
+    const { core } = mockTree(Array.from({ length: 100 }, (_, index) => `記事${index}.md`));
+    const result = await call(core, {});
+    expect(result).toMatchObject({ matched: 100 });
+    expect('found' in result && Array.isArray(result.found) ? result.found : []).toHaveLength(100);
+    expect(result).not.toHaveProperty('too_many');
+  });
+
+  it('breaks a tie on clipped_at by path, so the order never depends on tree order', async () => {
+    const { env, core } = mockTree(['ロ.md', 'イ.md']);
+    for (const path of ['clips/ロ.md', 'clips/イ.md']) {
+      await recordClip(env, {
+        path,
+        url: `https://example.com/${encodeURIComponent(path)}`,
+        title: path,
+        excerpt: '',
+        clippedAt: '2026-08-20T00:00:00.000Z',
+      });
+    }
+
+    const result = await call(core, {});
+    const found = 'found' in result && Array.isArray(result.found) ? result.found : [];
+    expect(found.map((clip) => clip.path)).toEqual(['clips/イ.md', 'clips/ロ.md']);
+  });
+
+  it('returns the count instead of an arbitrary slice when too many match', async () => {
+    const { core } = mockTree(Array.from({ length: 101 }, (_, index) => `記事${index}.md`));
+    expect(await call(core, {})).toEqual({ found: [], matched: 101, too_many: true });
+  });
+
+  it('omits the count when the tree could not be read, so zero is never implied', async () => {
+    const { core } = mockTree([], { fail: true });
+    const result = await call(core, {});
+    expect(result).toEqual({ found: [], failed_at: 'github' });
+    expect(result).not.toHaveProperty('matched');
+  });
+});

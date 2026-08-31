@@ -37,7 +37,9 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
 - **同じ一覧をブラウザからも見る**
   同じ内容を、認証付きの読み取り専用Webページとしても出す。GitHubを開かずに、ログインできない環境からも眺められる。母集団と並びは`clips/README.md`と同じものを使い、レイアウトだけHTMLに合わせて組み直す。操作は置かず、片付けはSlackのまま（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
 - **保存済みクリップを本文から探して読み返す**
-  Slackで覚えている語を伝えると、GitHub上の題名・パス・本文から最大5件の候補を探し、選んだMarkdownだけを読んで質問へ答える。D1に記録が無いクリップも検索でき、削除済みの古い検索結果は本文を読む直前の実在確認で止める。
+  Slackで覚えている語を伝えると、GitHub上の本文から最大5件の候補を探し、選んだMarkdownだけを読んで質問へ答える。D1に記録が無いクリップも検索でき、削除済みの古い検索結果は本文を読む直前の実在確認で止める。本文検索はGitHubのコード検索索引に依存するため、0件でも「保存されていない」ことの根拠にはしない。
+- **題名を言えるクリップは、索引の状態によらず必ず見つける**
+  題名の一部を伝えると、コード検索索引ではなくGitHubのファイル一覧そのものを走査して在否を答える。全件を見た結果なので、0件は「保存されていない」という事実として扱える。実際にコード検索索引が5日以上巻き戻り、39件中22件が題名でも引けなくなった事故を受けた判断（[ADR 0031](docs/adr/0031-list-clips-from-the-file-tree.md)）。
 - **その場で、または週次ダイジェストで片付け**
   保存した直後の返信にボタンが付き、読まないと決めた記事をその場で片付けられる。まだ片付けていないクリップは毎週日曜9時（JST）に最大7件Slackへ再掲され、こちらもボタンまたはスレッド内の自然文で片付けられる。GitHub上でMarkdownを直接消したクリップは、投稿の直前に実在を確かめて落とすため、ダイジェストには出てこない。
 - **壊れた保存はチャットから削除**
@@ -77,7 +79,7 @@ Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、公開
 
 現在のWorkerをBot/Coreとして残し、外部から到達する入口だけを持つMCP Edge Workerを同じrepositoryから別deployする。外部MCP clientはCloudflare Access Managed OAuthで保護したCustom Domainへ接続し、MCP EdgeからCoreへはDNSを通さずService Binding RPCで到達する。通常Botは公開MCPを経由せず、両方の入口が同じCore use caseを呼ぶ。
 
-`load_content` / `save_loaded`と`find_clips` / `read_clip` / `delete_clip`の受け渡しは、owner単位のDurable Objectに置くopaque refを使う。通常BotとMCPで同じtool contractを共有し、会話履歴とrefは90日で削除する。MCP tool callは同期で処理し、既存QueueはSlackの3秒ACKと再試行のためだけに残す。詳細と判断理由は[ADR 0021](docs/adr/0021-publish-tools-through-mcp-edge.md)と[ADR 0022](docs/adr/0022-persist-tool-refs-in-durable-object.md)に記録している。
+`load_content` / `save_loaded`と`list_clips` / `find_clips` / `read_clip` / `delete_clip`の受け渡しは、owner単位のDurable Objectに置くopaque refを使う。通常BotとMCPで同じtool contractを共有し、会話履歴とrefは90日で削除する。MCP tool callは同期で処理し、既存QueueはSlackの3秒ACKと再試行のためだけに残す。詳細と判断理由は[ADR 0021](docs/adr/0021-publish-tools-through-mcp-edge.md)と[ADR 0022](docs/adr/0022-persist-tool-refs-in-durable-object.md)に記録している。
 
 MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、EdgeへCustom Domainを手動設定し、そのhostname全体をAccess applicationで保護してManaged OAuthを有効にする。EdgeはCloudflareが検証済みの`ctx.access`からaudienceと本人identityを確認する。必要な実環境値は`ACCESS_AUD`、`ACCESS_ALLOWED_EMAIL`、`MCP_HOSTNAME`で、Coreの業務secretは渡さない。`workers.dev`とpreview URLは無効化している。
 
@@ -185,3 +187,4 @@ pnpm dry-run
 - [本文の上限は取得と読み直しで1つにし、保存時の素性を読み直しにも渡す](docs/adr/0026-one-body-limit-for-fetch-and-reread.md)
 - [日本語でないクリップは、保存の後で本文を日本語へ置き換える](docs/adr/0027-translate-clips-into-japanese-after-saving.md)
 - [新着一覧を、公開境界Workerの読み取り専用ページとしても出す](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)
+- [題名での在否確認は、二次索引ではなくファイル一覧で行う](docs/adr/0031-list-clips-from-the-file-tree.md)
