@@ -67,7 +67,7 @@ function createServer(env: McpEdgeEnv, audit: McpAuditContext): McpServer {
 /** 外部MCPクライアント向けのStreamable HTTP（ADR 0021）。 */
 const MCP_PATH = '/mcp';
 
-/** 自分がブラウザから開く読み取り専用の新着一覧（ADR 0030）。 */
+/** 自分がブラウザから開く読み取り専用のクリップ一覧（ADR 0030、ADR 0032）。 */
 const CLIP_PAGE_PATH = '/clips';
 
 /**

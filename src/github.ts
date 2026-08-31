@@ -24,10 +24,11 @@ const CLIPS_TREE_REF = 'HEAD:clips';
  * 手書きのREADMEだけである。`makeClipFileName`が題名`README`を`README-clip.md`へ
  * 逃がすので（`src/url.ts`）、このパスが記事であることはない。
  *
- * バックフィルは同じ判断をNode側で持つ。あちらは素のESMで走り、拡張子の無い相対importを
- * 解決できないため、このモジュールからは読めない。
+ * 母集団を決めるのはこのモジュールだけなので、外へは出さない。バックフィルは同じ判断を
+ * Node側で持つ。あちらは素のESMで走り、拡張子の無い相対importを解決できないため、
+ * このモジュールからは読めない。
  */
-export const CLIPS_README_PATH = 'clips/README.md';
+const CLIPS_README_PATH = 'clips/README.md';
 
 interface CachedToken {
   cacheKey: string;

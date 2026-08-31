@@ -13,7 +13,6 @@ import { clipExcerpt } from './excerpt';
 import { loadContent, truncateContent } from './fetchers';
 import { parseClipFrontMatter } from './front-matter';
 import {
-  CLIPS_README_PATH,
   deleteGitHubFile,
   getGitHubFile,
   getGitHubTextFile,
