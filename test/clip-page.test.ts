@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { type ClipPageEntry, renderClipPage } from '../src/clip-page';
+import { renderClipPage } from '../src/clip-page';
+import type { PageClip } from '../src/clips';
 
-const entry = (overrides: Partial<ClipPageEntry> = {}): ClipPageEntry => ({
+const entry = (overrides: Partial<PageClip> = {}): PageClip => ({
   path: 'clips/Worker 設計.md',
   url: 'https://zenn.dev/alice/articles/worker',
   title: 'Worker [設計]',
@@ -18,9 +19,9 @@ const entry = (overrides: Partial<ClipPageEntry> = {}): ClipPageEntry => ({
  */
 const entries = (
   count: number,
-  overrides: Partial<ClipPageEntry> = {},
+  overrides: Partial<PageClip> = {},
   name = '記事',
-): ClipPageEntry[] =>
+): PageClip[] =>
   Array.from({ length: count }, (_, index) =>
     entry({
       path: `clips/${name}${index}.md`,
@@ -78,6 +79,13 @@ describe('renderClipPage', () => {
 
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+
+  // バックフィル由来の行は題名を持たない（ADR 0011）。パスから導いて空欄にしない。
+  it('falls back to the path when the ledger row has no title', () => {
+    const html = renderClipPage([entry({ title: null })], page);
+
+    expect(html).toContain('>Worker 設計</a>');
   });
 
   it('drops a thumbnail and a title link that are not http(s)', () => {

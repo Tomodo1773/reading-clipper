@@ -4,17 +4,6 @@ import type { Env } from './types';
 /** 見出しと`<title>`。 */
 const CLIP_PAGE_TITLE = 'Clips';
 
-export interface ClipPageEntry {
-  path: string;
-  title: string;
-  url: string | null;
-  excerpt: string | null;
-  imageUrl: string | null;
-  clippedAt: string;
-  /** 片付けた印。どちらの節へ入れるかを、これだけで決める。 */
-  dismissedAt: string | null;
-}
-
 export interface ClipPageOptions {
   /** `owner/repo`。保存済みMarkdownへの絶対リンクに使う。 */
   repo: string;
@@ -76,10 +65,13 @@ function savedCopyUrl(repo: string, path: string): string {
   return `https://github.com/${repo}/blob/HEAD/${encodedPath}`;
 }
 
-/** 題名。URLが無い、または不正な古いデータはリンクにしない（ADR 0017）。 */
-function titleLink(entry: ClipPageEntry): string {
-  const label = escapeHtml(oneLine(entry.title));
-  const href = sourceHref(entry.url);
+/**
+ * 題名。URLが無い、または不正な古いデータはリンクにしない（ADR 0017）。
+ * 台帳に題名を持たない行はパスから導く（ADR 0011）。
+ */
+function titleLink(clip: PageClip): string {
+  const label = escapeHtml(oneLine(clipTitle(clip)));
+  const href = sourceHref(clip.url);
   return href ? `<a href="${escapeHtml(href)}">${label}</a>` : label;
 }
 
@@ -87,11 +79,11 @@ function titleLink(entry: ClipPageEntry): string {
  * 題名の脇に出す素性。2つの節が同じ画面に並ぶので、並びも項目も揃える。
  * 保存済みMarkdownへのリンクだけはHTMLとして組むので、エスケープを通さない。
  */
-function metaLine(entry: ClipPageEntry, repo: string): string {
-  return [clipHost(entry.url), clippedDay(entry.clippedAt)]
+function metaLine(clip: PageClip, repo: string): string {
+  return [clipHost(clip.url), clippedDay(clip.clippedAt)]
     .filter(Boolean)
     .map(escapeHtml)
-    .concat(`<a href="${escapeHtml(savedCopyUrl(repo, entry.path))}">GitHub版</a>`)
+    .concat(`<a href="${escapeHtml(savedCopyUrl(repo, clip.path))}">GitHub版</a>`)
     .join(' · ');
 }
 
@@ -124,12 +116,12 @@ a:hover { text-decoration:underline; }
 /**
  * まだ片付けていない1件。サムネイルと抜粋を添える。ここは眺めて選ぶ面である。
  */
-function pendingRow(entry: ClipPageEntry, repo: string): string {
-  const image = sourceHref(entry.imageUrl);
+function pendingRow(clip: PageClip, repo: string): string {
+  const image = sourceHref(clip.imageUrl);
   const body =
-    `<div class="text"><p class="title">${titleLink(entry)}</p>` +
-    (entry.excerpt ? `<p class="excerpt">${escapeHtml(entry.excerpt)}</p>` : '') +
-    `<p class="meta">${metaLine(entry, repo)}</p></div>`;
+    `<div class="text"><p class="title">${titleLink(clip)}</p>` +
+    (clip.excerpt ? `<p class="excerpt">${escapeHtml(clip.excerpt)}</p>` : '') +
+    `<p class="meta">${metaLine(clip, repo)}</p></div>`;
   // Referrerを送らない。記事のサムネイルは第三者のサーバーから読むので、
   // Accessの後ろにあるホスト名をそのまま渡さない。
   const thumbnail = image
@@ -144,8 +136,8 @@ function pendingRow(entry: ClipPageEntry, repo: string): string {
  * ここへ来るのは眺めるためではなく、読み終えた記事のURLを取りに来るときである。
  * 1件を軽くしておくことが、件数の上限を持たずに全件を並べるための条件になる。
  */
-function doneRow(entry: ClipPageEntry, repo: string): string {
-  return `<li><span class="title">${titleLink(entry)}</span><span class="meta">${metaLine(entry, repo)}</span></li>`;
+function doneRow(clip: PageClip, repo: string): string {
+  return `<li><span class="title">${titleLink(clip)}</span><span class="meta">${metaLine(clip, repo)}</span></li>`;
 }
 
 /**
@@ -155,25 +147,25 @@ function doneRow(entry: ClipPageEntry, repo: string): string {
  * 件数は節の長さがそのまま答えなので、見出しへ入れて別に数えない。
  * 読むだけの面なので、片付けなどの操作は置かない。
  */
-export function renderClipPage(entries: ClipPageEntry[], options: ClipPageOptions): string {
-  const pending = entries.filter((entry) => entry.dismissedAt === null);
-  const done = entries.filter((entry) => entry.dismissedAt !== null);
+export function renderClipPage(clips: PageClip[], options: ClipPageOptions): string {
+  const pending = clips.filter((clip) => clip.dismissedAt === null);
+  const done = clips.filter((clip) => clip.dismissedAt !== null);
 
   const sections: string[] = [];
-  if (entries.length === 0) {
+  if (clips.length === 0) {
     sections.push('<p>まだクリップはない。</p>');
   } else {
     sections.push(`<h2>まだ片付けていない（${pending.length}件）</h2>`);
     sections.push(
       pending.length === 0
         ? '<p>全部片付いた。</p>'
-        : `<ol class="clips">${pending.map((entry) => pendingRow(entry, options.repo)).join('')}</ol>`,
+        : `<ol class="clips">${pending.map((clip) => pendingRow(clip, options.repo)).join('')}</ol>`,
     );
     // 片付けたものが1件も無いうちは、節そのものを出さない。
     if (done.length > 0) {
       sections.push(`<h2>片付けたもの（${done.length}件）</h2>`);
       sections.push(
-        `<ol class="done">${done.map((entry) => doneRow(entry, options.repo)).join('')}</ol>`,
+        `<ol class="done">${done.map((clip) => doneRow(clip, options.repo)).join('')}</ol>`,
       );
     }
   }
@@ -189,12 +181,7 @@ export function renderClipPage(entries: ClipPageEntry[], options: ClipPageOption
   );
 }
 
-function pageEntries(clips: PageClip[]): ClipPageEntry[] {
-  return clips.map((clip) => ({ ...clip, title: clipTitle(clip) }));
-}
-
 /** 閲覧ページのHTMLを組み立てる（ADR 0030）。読むのはD1の1クエリだけ。 */
 export async function buildClipPage(env: Env): Promise<string> {
-  const clips = await selectAllClips(env);
-  return renderClipPage(pageEntries(clips), { repo: env.GITHUB_REPO });
+  return renderClipPage(await selectAllClips(env), { repo: env.GITHUB_REPO });
 }
