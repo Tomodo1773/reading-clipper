@@ -1,5 +1,4 @@
 import { ClipError, isRetryableStatus } from './errors';
-import { CLIP_INDEX_PATH } from './clip-index-format';
 import type { Env } from './types';
 import {
   asRecord,
@@ -17,6 +16,19 @@ const GITHUB_API_VERSION = '2022-11-28';
 const CODE_SEARCH_SIZE = 5;
 /** `{ref}:{path}`でサブツリーを名指す。パス側は`clips/`固定なのでエスケープは要らない。 */
 const CLIPS_TREE_REF = 'HEAD:clips';
+
+/**
+ * `clips/`直下のREADME。クリップの母集団から常に外す（ADR 0032）。
+ *
+ * かつては生成物だったので所有マーカーを見て判定していたが、生成をやめた今そこにあるのは
+ * 手書きのREADMEだけである。`makeClipFileName`が題名`README`を`README-clip.md`へ
+ * 逃がすので（`src/url.ts`）、このパスが記事であることはない。
+ *
+ * 母集団を決めるのはこのモジュールだけなので、外へは出さない。バックフィルは同じ判断を
+ * Node側で持つ。あちらは素のESMで走り、拡張子の無い相対importを解決できないため、
+ * このモジュールからは読めない。
+ */
+const CLIPS_README_PATH = 'clips/README.md';
 
 interface CachedToken {
   cacheKey: string;
@@ -210,7 +222,7 @@ export async function searchGitHubCode(env: Env, query: string): Promise<GitHubC
       stringField(repository, 'full_name')?.toLowerCase() !== expectedRepo ||
       !path?.startsWith('clips/') ||
       !path.toLowerCase().endsWith('.md') ||
-      path === CLIP_INDEX_PATH ||
+      path === CLIPS_README_PATH ||
       !sha ||
       !htmlUrl
     ) {
@@ -269,7 +281,7 @@ export async function listGitHubClipFiles(env: Env): Promise<string[]> {
     if (stringField(entry, 'type') !== 'blob' || !fileName) continue;
     if (!fileName.toLowerCase().endsWith('.md')) continue;
     const path = `clips/${fileName}`;
-    if (path === CLIP_INDEX_PATH) continue;
+    if (path === CLIPS_README_PATH) continue;
     paths.push(path);
   }
   return paths;

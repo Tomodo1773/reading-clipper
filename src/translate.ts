@@ -1,7 +1,6 @@
 import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { createProvider, throwModelCallError } from './ai';
-import { refreshClipIndexBestEffort } from './clip-index';
 import { updateClipExcerpt } from './clips';
 import { asClipError, ClipError, logFailure, settleQueueFailure } from './errors';
 import { clipExcerpt } from './excerpt';
@@ -202,7 +201,6 @@ async function translateClip(env: Env, job: TranslateJob): Promise<void> {
   try {
     // 題名は渡さない。訳文の見出しは原題と一致しないので、渡しても何も落ちない。
     await updateClipExcerpt(env, job.path, clipExcerpt(text));
-    await refreshClipIndexBestEffort(env, job.path);
   } catch (error) {
     logFailure(error, 'clips', 'translate_clip_excerpt', { path: job.path });
   }

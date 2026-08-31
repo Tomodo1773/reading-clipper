@@ -12,9 +12,6 @@ export const DIGEST_SIZE = 7;
  */
 const DIGEST_CANDIDATES = DIGEST_SIZE + 3;
 
-/** GitHubのclips/直下で見せる新着件数。保存総数には連動させない（ADR 0017）。 */
-const RECENT_CLIP_SIZE = 20;
-
 /** 台帳の1行のうち、読み出す用途によらず要る部分。 */
 export interface ClipRow {
   path: string;
@@ -39,9 +36,15 @@ export interface FoundClip extends ClipRow {
 }
 
 /**
- * 新着一覧に出す1件。カードに使う列に加えて、取り消し線の判断に要る印まで読む（ADR 0023）。
+ * 閲覧ページに出す1件（ADR 0032）。
+ *
+ * `DigestClip`を継承しない。あちらは実在確認でGitHubが返す`githubUrl`を持つが、
+ * それはD1に無い値で、ページはD1だけを読む。使わない任意フィールドを型へ持ち込まない。
  */
-export interface RecentClip extends DigestClip {
+export interface PageClip extends ClipRow {
+  excerpt: string | null;
+  imageUrl: string | null;
+  /** 片付けた印。どちらの節へ入れるかを、これだけで決める。 */
   dismissedAt: string | null;
 }
 
@@ -124,38 +127,22 @@ export async function selectDigestClips(env: Env): Promise<DigestClip[]> {
 }
 
 /**
- * 保存構造とは別の新着ビューを組み立てるため、片付け済みも含めて新しい順に読む。
+ * 閲覧ページの母集団を読む。件数で切らず、台帳の全件を返す（ADR 0032）。
  *
- * ここで`dismissed_at`を絞らないのはADR 0017のままである。カードへ出すか箇条書きへ
- * 落とすかは表示側の判断なので、印はそのまま渡して振り分けさせる（ADR 0023）。
+ * 窓で切っていた頃は、片付け済みも席を取るため、片付けていない古いクリップが
+ * 原理的に見えなかった。在庫を見る面である以上、そこを時間で切らない。
+ *
+ * 未片付けと片付け済みで並びが同じなので、2クエリに分けず1回で取って表示側で振り分ける。
+ * 件数の集計も別に取らない。全件がここに揃うので、節の長さがそのまま件数になる。
  */
-export async function selectRecentClips(env: Env): Promise<RecentClip[]> {
+export async function selectAllClips(env: Env): Promise<PageClip[]> {
   const { results } = await env.CLIPS.prepare(
     `SELECT path, url, title, excerpt, image_url AS imageUrl, clipped_at AS clippedAt,
             dismissed_at AS dismissedAt
        FROM clips
-      ORDER BY clipped_at DESC, path ASC
-      LIMIT ?`,
-  )
-    .bind(RECENT_CLIP_SIZE)
-    .all<RecentClip>();
+      ORDER BY clipped_at DESC, path ASC`,
+  ).all<PageClip>();
   return results;
-}
-
-/**
- * 棚の規模と、まだ片付けていない量を数える。新着一覧の見出しに出す（ADR 0023）。
- *
- * 新着一覧は最新20件しか読まないので、全体の量はそこからは分からない。
- * 表示のためだけの集計なので、2回に分けず1クエリで取る。
- */
-export async function countClips(env: Env): Promise<{ total: number; undismissed: number }> {
-  const row = await env.CLIPS.prepare(
-    `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN dismissed_at IS NULL THEN 1 ELSE 0 END) AS undismissed
-       FROM clips`,
-  ).first<{ total: number; undismissed: number | null }>();
-  // 0件のとき SUM は NULL を返す。
-  return { total: row?.total ?? 0, undismissed: row?.undismissed ?? 0 };
 }
 
 /**

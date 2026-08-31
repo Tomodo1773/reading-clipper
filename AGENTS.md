@@ -32,10 +32,10 @@
 | `src/front-matter.ts` | 保存済みMarkdownのフロントマターをWorkerとバックフィルで共通して読む |
 | `src/markdown.ts` | 保存するMarkdownの組み立て |
 | `src/translate.ts` | 保存後の翻訳。訳すかどうかの判定、本文の分割、GitHubへの書き戻し。Slackへは何も返しません |
-| `src/clip-index.ts` / `src/clip-index-format.ts` | 新着一覧のGitHub同期と、importなしの描画（READMEのMarkdownと閲覧ページのHTML）・生成物識別。レイアウトは共有せず、片付けを印として残す方針だけを揃えます |
+| `src/clip-page.ts` | 閲覧ページの母集団の読み出しとHTMLの組み立て。まだ片付けていないものと片付けたものを、件数で切らずに2段で出します |
 | `src/clips.ts` | D1へのアクセス。読書状態の注釈レイヤーです |
 | `src/digest.ts` | 週次ダイジェストの組み立て |
-| `src/dismiss.ts` | 片付けの適用（D1の印と新着一覧の作り直し）と、そのボタン。ボタンとエージェントのツールの両方がここを通ります |
+| `src/dismiss.ts` | 片付けのボタンと、押されたあとのSlackメッセージの組み直し。D1へ印を書くのは`src/clips.ts`です |
 | `src/errors.ts` | `ClipError` と `ProcessingStage`。失敗をどの段階のものとして扱うかと、Queueでの後始末（会話・翻訳で共通） |
 | `src/excerpt.ts` / `src/html.ts` | Worker側とNode側（バックフィル）の両方から呼びます。同じ入力から必ず同じ結果を出す必要があるため、**何もimportしない**制約があります |
 

@@ -1,6 +1,6 @@
 # ADR 0017: フラットな保存構造と新着順の表示を分離する
 
-- ステータス: Accepted（各行の表示内容は[ADR 0023](0023-clip-index-cards-and-dismissed-marks.md)で更新）
+- ステータス: Superseded（各行の表示内容は[ADR 0023](0023-clip-index-cards-and-dismissed-marks.md)で更新。`clips/README.md`の自動生成そのものは[ADR 0032](0032-clip-page-shows-the-backlog-not-the-newest.md)で廃止）
 - 日付: 2026-08-19
 
 ## 背景

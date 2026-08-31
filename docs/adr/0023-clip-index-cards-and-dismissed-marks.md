@@ -1,6 +1,6 @@
 # ADR 0023: 新着一覧をカードと箇条書きに分け、片付けを表示に出す
 
-- ステータス: Accepted
+- ステータス: Superseded（[ADR 0032](0032-clip-page-shows-the-backlog-not-the-newest.md)。`clips/README.md`の自動生成を廃止したため、ここで決めたMarkdownの描画は残っていない）
 - 日付: 2026-08-25
 
 ## 背景

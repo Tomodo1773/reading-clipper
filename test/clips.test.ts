@@ -2,13 +2,12 @@ import { env as testEnv } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clipTitle,
-  countClips,
   deleteClip,
   markDigestShown,
   recordClip,
+  selectAllClips,
   selectClipsByPath,
   selectDigestClips,
-  selectRecentClips,
   selectUndismissed,
   setClipDismissed,
 } from '../src/clips';
@@ -224,8 +223,9 @@ describe('selectClipsByPath', () => {
   });
 });
 
-describe('selectRecentClips', () => {
-  it('returns at most 20 clips newest first, including dismissed clips', async () => {
+describe('selectAllClips', () => {
+  // 窓で切っていた頃は、片付け済みが席を取るぶんだけ古い未片付けが落ちていた（ADR 0032）。
+  it('returns the whole ledger newest first, without a limit', async () => {
     await seed(
       Array.from({ length: 22 }, (_unused, index) => ({
         path: `clips/${String(index).padStart(2, '0')}.md`,
@@ -234,11 +234,11 @@ describe('selectRecentClips', () => {
       })),
     );
 
-    const recent = await selectRecentClips(env);
+    const clips = await selectAllClips(env);
 
-    expect(recent).toHaveLength(20);
-    expect(recent[0]?.path).toBe('clips/21.md');
-    expect(recent.at(-1)?.path).toBe('clips/02.md');
+    expect(clips).toHaveLength(22);
+    expect(clips[0]?.path).toBe('clips/21.md');
+    expect(clips.at(-1)?.path).toBe('clips/00.md');
   });
 
   it('uses the path as a stable tie breaker', async () => {
@@ -247,13 +247,13 @@ describe('selectRecentClips', () => {
       { path: 'clips/a.md', clippedAt: '2026-08-01T00:00:00.000Z' },
     ]);
 
-    expect((await selectRecentClips(env)).map((clip) => clip.path)).toEqual([
+    expect((await selectAllClips(env)).map((clip) => clip.path)).toEqual([
       'clips/a.md',
       'clips/b.md',
     ]);
   });
 
-  it('reads the columns the card needs, including the dismissed mark', async () => {
+  it('reads the columns the page needs, including the dismissed mark', async () => {
     await recordClip(env, {
       path: 'clips/Workerの設計.md',
       url: 'https://qiita.com/a/items/1',
@@ -264,7 +264,7 @@ describe('selectRecentClips', () => {
     });
     await setClipDismissed(env, 'clips/Workerの設計.md', true, '2026-08-02T00:00:00.000Z');
 
-    expect((await selectRecentClips(env))[0]).toMatchObject({
+    expect((await selectAllClips(env))[0]).toMatchObject({
       title: 'Workerの設計',
       excerpt: '抜粋',
       imageUrl: 'https://qiita.com/ogp.png',
@@ -303,22 +303,3 @@ describe('deleteClip', () => {
   });
 });
 
-describe('countClips', () => {
-  it('counts the whole ledger and what is left undismissed', async () => {
-    await seed([
-      { path: 'clips/a.md', clippedAt: '2026-08-01T00:00:00.000Z' },
-      {
-        path: 'clips/b.md',
-        clippedAt: '2026-08-02T00:00:00.000Z',
-        dismissedAt: '2026-08-03T00:00:00.000Z',
-      },
-      { path: 'clips/c.md', clippedAt: '2026-08-03T00:00:00.000Z' },
-    ]);
-
-    expect(await countClips(env)).toEqual({ total: 3, undismissed: 2 });
-  });
-
-  it('returns zeros for an empty ledger instead of NULL', async () => {
-    expect(await countClips(env)).toEqual({ total: 0, undismissed: 0 });
-  });
-});

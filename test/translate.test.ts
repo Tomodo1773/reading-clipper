@@ -52,7 +52,6 @@ interface Recorded {
   modelCalls: number;
   savedMarkdown: string;
   savedSha: string;
-  indexMarkdown: string;
 }
 
 /**
@@ -67,7 +66,6 @@ function mockWorld(
     modelCalls: 0,
     savedMarkdown: '',
     savedSha: '',
-    indexMarkdown: '',
   };
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
@@ -95,13 +93,8 @@ function mockWorld(
     }
     if (url.includes('/contents/') && method === 'PUT') {
       const body = JSON.parse(String(init?.body));
-      const path = decodeURIComponent(url.split('/contents/')[1] ?? '');
-      if (path === 'clips/README.md') {
-        recorded.indexMarkdown = base64ToUtf8(body.content);
-      } else {
-        recorded.savedMarkdown = base64ToUtf8(body.content);
-        recorded.savedSha = body.sha ?? '';
-      }
+      recorded.savedMarkdown = base64ToUtf8(body.content);
+      recorded.savedSha = body.sha ?? '';
       return jsonResponse(
         {
           content: {
@@ -283,7 +276,6 @@ describe('translating a saved clip', () => {
       .first<{ title: string; excerpt: string }>();
     expect(row?.title).toBe('Deep Dive');
     expect(row?.excerpt).toContain('待ち行列');
-    expect(recorded.indexMarkdown).toContain('待ち行列');
 
     expect(delivered.acked).toBe(1);
     expect(delivered.retried).toBe(0);

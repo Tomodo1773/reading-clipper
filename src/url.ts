@@ -138,7 +138,7 @@ function makeClipFileName(title: string): string {
   const [head = '', ...rest] = name.split('.');
   if (RESERVED_DEVICE_NAME.test(head)) name = [`${head}_`, ...rest].join('.');
 
-  // clips/README.mdは新着インデックスに予約する（ADR 0017）。
+  // clips/README.mdはフォルダのREADMEに予約し、記事には使わない（ADR 0017、ADR 0032）。
   if (/^readme$/iu.test(name)) name = `${name}-clip`;
 
   name = truncateToBytes(name, MAX_FILE_NAME_BYTES - CLIP_EXTENSION.length).replace(
