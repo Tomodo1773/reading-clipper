@@ -5,6 +5,7 @@ import {
   type ClipIndexEntry,
   isGeneratedClipIndex,
   renderClipIndex,
+  renderClipPage,
 } from '../src/clip-index-format';
 import { recordClip } from '../src/clips';
 import { resetGitHubTokenCache } from '../src/github';
@@ -326,5 +327,77 @@ describe('refreshClipIndex', () => {
     expect(gets).toBe(2);
     expect(puts).toBe(2);
     expect(usedShas).toEqual(['sha-1', 'sha-2']);
+  });
+});
+
+describe('renderClipPage', () => {
+  const page = { repo: 'example/clips' };
+
+  it('links the title to the article and the saved copy to GitHub', () => {
+    const html = renderClipPage([entry()], counts(1, 1), page);
+
+    expect(html).toContain('<a href="https://zenn.dev/alice/articles/worker">Worker [設計]</a>');
+    expect(html).toContain(
+      '<a href="https://github.com/example/clips/blob/HEAD/clips/Worker%20%E8%A8%AD%E8%A8%88.md">GitHub版</a>',
+    );
+    expect(html).toContain('zenn.dev · 8/19');
+    expect(html).toContain('保存 1件 · まだ片付けていない 1件');
+  });
+
+  it('escapes HTML that came in with the excerpt, title and image URL', () => {
+    const html = renderClipPage(
+      [
+        entry({
+          title: '<script>alert(1)</script>',
+          excerpt: '本文に<b>タグ</b>が混じる',
+          imageUrl: 'https://img.example.com/a.png?a=1&b="2"',
+        }),
+      ],
+      counts(1, 1),
+      page,
+    );
+
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(html).toContain('本文に&lt;b&gt;タグ&lt;/b&gt;が混じる');
+    expect(html).toContain('src="https://img.example.com/a.png?a=1&amp;b=%222%22"');
+  });
+
+  it('drops a thumbnail and a title link that are not http(s)', () => {
+    const html = renderClipPage(
+      [entry({ url: 'javascript:alert(1)', imageUrl: 'javascript:alert(1)' })],
+      counts(1, 1),
+      page,
+    );
+
+    expect(html).not.toContain('javascript:');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('<p class="title">Worker [設計]</p>');
+  });
+
+  it('keeps a dismissed clip in place and marks it instead of hiding it', () => {
+    const html = renderClipPage(
+      [entry({ dismissedAt: '2026-08-20T00:00:00.000Z' })],
+      counts(1, 0),
+      page,
+    );
+
+    expect(html).toContain('<li class="clip dismissed">');
+    expect(html).toContain('<a href="https://zenn.dev/alice/articles/worker">Worker [設計]</a>');
+  });
+
+  it('lists every clip in one run, without the Markdown card split', () => {
+    const html = renderClipPage(entries(20), counts(20, 20), page);
+
+    expect(html.match(/<li class="clip/gu)).toHaveLength(20);
+    expect(html).not.toContain('最近のクリップ');
+    expect(html).not.toContain('それ以前');
+  });
+
+  it('says so when there is nothing saved yet', () => {
+    const html = renderClipPage([], counts(0, 0), page);
+
+    expect(html).toContain('まだクリップはない。');
+    expect(html).not.toContain('<li');
   });
 });

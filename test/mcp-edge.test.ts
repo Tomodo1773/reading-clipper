@@ -1,6 +1,6 @@
 import { createExecutionContext } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import mcpEdge, { getAccessAuditContext, type McpEdgeEnv } from '../src/mcp-edge';
+import mcpEdge, { getAccessSubject, type McpEdgeEnv } from '../src/mcp-edge';
 
 const AUD = 'access-audience';
 const EMAIL = 'owner@example.com';
@@ -8,16 +8,23 @@ const HOST = 'mcp.example.com';
 
 function edgeEnv(overrides: Partial<McpEdgeEnv> = {}) {
   const callTool = vi.fn(async () => ({ found: [] }));
+  const renderClipPage = vi.fn(async () => '<!doctype html>\n<html lang="ja"><body>Clips</body></html>');
   return {
     env: {
-      CORE: { callTool } as unknown as McpEdgeEnv['CORE'],
+      CORE: { callTool, renderClipPage } as unknown as McpEdgeEnv['CORE'],
       ACCESS_AUD: AUD,
       ACCESS_ALLOWED_EMAIL: EMAIL,
       MCP_HOSTNAME: HOST,
       ...overrides,
     },
     callTool,
+    renderClipPage,
   };
+}
+
+/** 閲覧ページはブラウザからのGETで、Originヘッダを持たない。 */
+function pageRequest(path = '/clips', headers: HeadersInit = {}): Request {
+  return new Request(`https://${HOST}${path}`, { headers: { host: HOST, ...headers } });
 }
 
 function accessContext(
@@ -60,25 +67,22 @@ describe('MCP Edge authentication', () => {
 
   it('rejects a different Access audience', async () => {
     const { env } = edgeEnv();
-    expect(await getAccessAuditContext(accessContext('other-audience'), env)).toBeUndefined();
+    expect(await getAccessSubject(accessContext('other-audience'), env)).toBeUndefined();
   });
 
   it('rejects a different allowed identity', async () => {
     const { env } = edgeEnv();
     expect(
-      await getAccessAuditContext(
+      await getAccessSubject(
         accessContext(AUD, { email: 'somebody-else@example.com', user_uuid: 'other' }),
         env,
       ),
     ).toBeUndefined();
   });
 
-  it('propagates only an audit source and stable Access subject', async () => {
+  it('propagates only the stable Access subject', async () => {
     const { env } = edgeEnv();
-    expect(await getAccessAuditContext(accessContext(), env)).toEqual({
-      source: 'mcp',
-      subject: 'access-user-123',
-    });
+    expect(await getAccessSubject(accessContext(), env)).toBe('access-user-123');
   });
 });
 
@@ -92,6 +96,19 @@ describe('MCP Edge boundary', () => {
     );
     expect(response.status).not.toBe(200);
     expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a path the boundary does not publish', async () => {
+    const { env, callTool, renderClipPage } = edgeEnv();
+    const response = await mcpEdge.fetch(
+      pageRequest('/clips/extra'),
+      env,
+      executionContext(accessContext()),
+    );
+
+    expect(response.status).toBe(404);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(renderClipPage).not.toHaveBeenCalled();
   });
 
   it('rejects an unexpected Origin', async () => {
@@ -149,5 +166,43 @@ describe('MCP Edge protocol', () => {
       { source: 'mcp', subject: 'access-user-123' },
       { name: 'find_clips', args: { query: 'Durable Object' } },
     );
+  });
+});
+
+describe('MCP Edge clip page', () => {
+  it('serves the page Core renders, without touching the tool contract', async () => {
+    const { env, callTool, renderClipPage } = edgeEnv();
+    const response = await mcpEdge.fetch(
+      pageRequest(),
+      env,
+      executionContext(accessContext()),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(await response.text()).toContain('<html lang="ja">');
+    expect(renderClipPage).toHaveBeenCalledWith({ source: 'web', subject: 'access-user-123' });
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it('does not render the page without an Access context', async () => {
+    const { env, renderClipPage } = edgeEnv();
+    const response = await mcpEdge.fetch(pageRequest(), env, executionContext());
+
+    expect(response.status).toBe(403);
+    expect(renderClipPage).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unexpected Host on the page as well', async () => {
+    const { env, renderClipPage } = edgeEnv();
+    const response = await mcpEdge.fetch(
+      pageRequest('/clips', { host: 'attacker.example.com' }),
+      env,
+      executionContext(accessContext()),
+    );
+
+    expect(response.status).not.toBe(200);
+    expect(renderClipPage).not.toHaveBeenCalled();
   });
 });

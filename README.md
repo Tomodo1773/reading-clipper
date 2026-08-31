@@ -8,7 +8,7 @@ SlackへURLを送るだけで、記事の保存・要約・再発見までをま
 
 Reading Clipperは、アプリやブラウザの共有メニューからSlackへ送ったURLを読み取り、Markdownとしてprivate GitHubリポジトリへ保存するサービス。保存直後にAIが内容を短く要約し、同じSlackスレッドで記事について質問できる。
 
-読まないと決めた記事は、保存直後の返信に付くボタンでその場で片付けられる。片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れる。専用のWeb画面はなく、クリップ、会話、整理の操作がSlackだけで完結する。
+読まないと決めた記事は、保存直後の返信に付くボタンでその場で片付けられる。片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れる。クリップ、会話、整理の操作はSlackだけで完結する。新着一覧だけは、GitHubを開かずに眺められる読み取り専用のWebページからも見られる。
 
 ## 開発の背景
 
@@ -34,6 +34,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   AIが本文を読んだ時点で日本語以外だと分かった記事は、保存の直後に翻訳を積み、本文を訳文へ置き換える。クリップの返信を待たせないよう非同期で走るため、ファイルが日本語になるのは保存の数分後になる。原文は同じパスの1つ前のコミットに残り、題名とファイル名は原題のまま変えない（[ADR 0027](docs/adr/0027-translate-clips-into-japanese-after-saving.md)）。
 - **最近保存したクリップをGitHubで一覧**
   保存先の`clips/README.md`へ最新20件を新しい順で自動表示。まだ片付けていない上位5件はサムネイルと冒頭の抜粋を添えたカードで並べ、それ以前は箇条書きにする。片付けたクリップは取り消し線で消し、見出しには保存総数と残りの件数を出す。タイトルから元の記事へ、各行の「GitHub版」から保存済みMarkdownへ移動できる。週次ダイジェストにも同じ副リンクを出す。記事のファイル名は日付で長くせずタイトルのまま保つ。
+- **同じ一覧をブラウザからも見る**
+  同じ内容を、認証付きの読み取り専用Webページとしても出す。GitHubを開かずに、ログインできない環境からも眺められる。母集団と並びは`clips/README.md`と同じものを使い、レイアウトだけHTMLに合わせて組み直す。操作は置かず、片付けはSlackのまま（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
 - **保存済みクリップを本文から探して読み返す**
   Slackで覚えている語を伝えると、GitHub上の題名・パス・本文から最大5件の候補を探し、選んだMarkdownだけを読んで質問へ答える。D1に記録が無いクリップも検索でき、削除済みの古い検索結果は本文を読む直前の実在確認で止める。
 - **その場で、または週次ダイジェストで片付け**
@@ -43,9 +45,11 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
 
 ## 主な特徴・設計上のポイント
 
-### Slackだけで完結
+### 操作はSlackだけで完結
 
-専用のWeb UIを持たず、保存、要約、記事についての会話、週次通知、片付けまでをSlackへ集約。新しい操作画面を覚えたり、一覧を見に行ったりする必要がない。
+保存、要約、記事についての会話、週次通知、片付けまでをSlackへ集約。新しい操作画面を覚える必要がない。
+
+Webに出すのは新着一覧の閲覧だけで、そこにボタンは置かない。読むための入口は増やすが、状態を変える操作はSlackから動かさない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
 
 ### Cloudflare Workersによる軽快な応答
 
@@ -69,13 +73,15 @@ Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、公開
 
 構成図の編集元とアイコンの出典は[`docs/architecture/`](docs/architecture/)にある。
 
-### MCP公開
+### 公開境界
 
-現在のWorkerをBot/Coreとして残し、公開`/mcp`だけを持つMCP Edge Workerを同じrepositoryから別deployする。外部MCP clientはCloudflare Access Managed OAuthで保護したCustom Domainへ接続し、MCP EdgeからCoreへはDNSを通さずService Binding RPCで到達する。通常Botは公開MCPを経由せず、両方の入口が同じCore use caseを呼ぶ。
+現在のWorkerをBot/Coreとして残し、外部から到達する入口だけを持つMCP Edge Workerを同じrepositoryから別deployする。外部MCP clientはCloudflare Access Managed OAuthで保護したCustom Domainへ接続し、MCP EdgeからCoreへはDNSを通さずService Binding RPCで到達する。通常Botは公開MCPを経由せず、両方の入口が同じCore use caseを呼ぶ。
 
 `load_content` / `save_loaded`と`find_clips` / `read_clip` / `delete_clip`の受け渡しは、owner単位のDurable Objectに置くopaque refを使う。通常BotとMCPで同じtool contractを共有し、会話履歴とrefは90日で削除する。MCP tool callは同期で処理し、既存QueueはSlackの3秒ACKと再試行のためだけに残す。詳細と判断理由は[ADR 0021](docs/adr/0021-publish-tools-through-mcp-edge.md)と[ADR 0022](docs/adr/0022-persist-tool-refs-in-durable-object.md)に記録している。
 
 MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、EdgeへCustom Domainを手動設定し、そのhostname全体をAccess applicationで保護してManaged OAuthを有効にする。EdgeはCloudflareが検証済みの`ctx.access`からaudienceと本人identityを確認する。必要な実環境値は`ACCESS_AUD`、`ACCESS_ALLOWED_EMAIL`、`MCP_HOSTNAME`で、Coreの業務secretは渡さない。`workers.dev`とpreview URLは無効化している。
+
+このWorkerは`/mcp`のほかに、新着一覧の閲覧ページ`/clips`を持つ。同じCustom Domain、同じAccess applicationの後ろに置き、認証は共通。EdgeはAccessで確認した本人であることだけを確かめてCoreへRPCを投げ、HTMLの組み立てはCore側で行う。Edgeにクリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。ページはブラウザから開くだけなのでManaged OAuthは経由しない。
 
 `ACCESS_AUD`にはAccess applicationのaudience tag、`ACCESS_ALLOWED_EMAIL`には許可する本人のemail、`MCP_HOSTNAME`にはschemeを含まないCustom Domainのhostnameを設定する。Custom Domain、Access application / policy / Managed OAuth、MCP Edge用のWorkers Builds接続は実環境で手動設定する。
 
@@ -155,7 +161,8 @@ pnpm dry-run
 - 単一のSlackワークスペースとユーザーをallowlistで許可する個人利用向け。
 - XはAPIから取得できる公開Postだけを対象とし、protected contentは保存しない。
 - 週次ダイジェストは「読んだか」ではなく「片付けたか」だけを管理。
-- 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しない。
+- 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しない。閲覧ページもCloudflare Accessで本人だけに限定し、公開しない。
+- 閲覧ページは読み取り専用で、片付けなどの操作は持たない。
 - 削除は既定ブランチの先頭からファイルを消すだけで、本文はGitの履歴に残る。取り消しは`git revert`で行う。
 - 翻訳は保存済みの本文を訳文で置き換える形で行い、原文はGitの履歴にだけ残る。訳し漏れたクリップは元の言語のまま残り、訳し直す導線は「同じURLをもう一度送る」だけ。
 
@@ -177,3 +184,4 @@ pnpm dry-run
 - [新着一覧をカードと箇条書きに分け、片付けを表示に出す](docs/adr/0023-clip-index-cards-and-dismissed-marks.md)
 - [本文の上限は取得と読み直しで1つにし、保存時の素性を読み直しにも渡す](docs/adr/0026-one-body-limit-for-fetch-and-reread.md)
 - [日本語でないクリップは、保存の後で本文を日本語へ置き換える](docs/adr/0027-translate-clips-into-japanese-after-saving.md)
+- [新着一覧を、公開境界Workerの読み取り専用ページとしても出す](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)

@@ -22,7 +22,7 @@
 | `src/chat.ts` | AI SDKでのモデル呼び出し1ターン |
 | `src/tool-contract.ts` | BotとMCP Edgeで共有するツール名・schema・説明 |
 | `src/tools.ts` | 共通ツール処理とAI SDK adapter（読む／保存する／探す／消す） |
-| `src/core-rpc.ts` / `src/mcp-edge.ts` | Service Binding RPCと公開`/mcp`境界 |
+| `src/core-rpc.ts` / `src/mcp-edge.ts` | Service Binding RPCと公開境界（`/mcp`と閲覧ページ`/clips`）。Edgeは認証と受け渡しだけを持ち、画面はCoreが組み立てます |
 | `src/tool-state.ts` / `src/retention.ts` | owner単位のopaque refと90日Alarm cleanup |
 | `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
 | `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / arXiv / Speaker Deck / ドクセル / Firecrawl）。サイト固有の変換ルールもここに置きます |
@@ -32,7 +32,7 @@
 | `src/front-matter.ts` | 保存済みMarkdownのフロントマターをWorkerとバックフィルで共通して読む |
 | `src/markdown.ts` | 保存するMarkdownの組み立て |
 | `src/translate.ts` | 保存後の翻訳。訳すかどうかの判定、本文の分割、GitHubへの書き戻し。Slackへは何も返しません |
-| `src/clip-index.ts` / `src/clip-index-format.ts` | 新着一覧のGitHub同期と、importなしのMarkdown生成・生成物識別 |
+| `src/clip-index.ts` / `src/clip-index-format.ts` | 新着一覧のGitHub同期と、importなしの描画（READMEのMarkdownと閲覧ページのHTML）・生成物識別。レイアウトは共有せず、片付けを印として残す方針だけを揃えます |
 | `src/clips.ts` | D1へのアクセス。読書状態の注釈レイヤーです |
 | `src/digest.ts` | 週次ダイジェストの組み立て |
 | `src/dismiss.ts` | 片付けの適用（D1の印と新着一覧の作り直し）と、そのボタン。ボタンとエージェントのツールの両方がここを通ります |

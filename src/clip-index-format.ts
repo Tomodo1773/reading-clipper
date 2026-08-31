@@ -30,11 +30,14 @@ export function isGeneratedClipIndex(path: string, content: string): boolean {
 }
 
 /**
- * GitHubがMarkdownとして解釈する文字を殺す。
+ * HTMLとして解釈される文字を殺す。意味は出力先で変わる（ADR 0030）。
  *
- * 目的は表示崩れを防ぐことであって、安全ではない。GitHubのサニタイザは`<script>`や
- * `onerror`を落とすが、`<b>`のような無害なタグは素通りさせる。抜粋は記事本文から
- * 作るのでHTMLが混じることがあり、そのまま埋めるとカードの見た目が記事ごとに変わる。
+ * GitHubのREADMEでは表示崩れの防止でしかない。GitHubのサニタイザが後ろにいて、
+ * `<script>`や`onerror`は落とされるためである。抜粋は記事本文から作るのでHTMLが
+ * 混じることがあり、そのまま埋めるとカードの見た目が記事ごとに変わる。
+ *
+ * 自分で配信する閲覧ページには、そのサニタイザが無い。同じ関数がそこでは注入への
+ * 防御そのものになる。属性値は必ず`"`で囲み、URLは`sourceHref`を通すこと。
  */
 function escapeHtml(value: string): string {
   return value
@@ -44,9 +47,14 @@ function escapeHtml(value: string): string {
     .replace(/"/gu, '&quot;');
 }
 
+/** 題名は複数行になりうる。どちらの出力でも1行へ畳んでから使う。 */
+function oneLine(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim();
+}
+
 /** GitHubのREADMEで壊さない文字だけを残し、改行を1行へ畳む。 */
 function markdownLabel(value: string): string {
-  return value.replace(/\s+/gu, ' ').trim().replace(/([\\\[\]])/gu, '\\$1');
+  return oneLine(value).replace(/([\\\[\]])/gu, '\\$1');
 }
 
 function sourceHref(url: string | null): string | null {
@@ -145,4 +153,104 @@ export function renderClipIndex(entries: ClipIndexEntry[], counts: ClipIndexCoun
     sections.push(`${listHeading}${rest.map(listRow).join('\n')}\n`);
   }
   return `${heading}${sections.join('\n')}`;
+}
+
+/**
+ * 閲覧ページの見出しと`<title>`。Markdown版の`# Clips`と揃える。
+ */
+const CLIP_PAGE_TITLE = 'Clips';
+
+export interface ClipPageOptions {
+  /** `owner/repo`。保存済みMarkdownへの絶対リンクに使う。 */
+  repo: string;
+}
+
+/**
+ * 保存済みMarkdownへのリンク。Markdown版は同じフォルダへの相対リンクで足りるが、
+ * 閲覧ページはGitHubの外から開くのでリポジトリからの完全なURLが要る。
+ * refは`HEAD`にする。既定ブランチ名を設定として持たずに済む。
+ */
+function savedCopyUrl(repo: string, path: string): string {
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  return `https://github.com/${repo}/blob/HEAD/${encodedPath}`;
+}
+
+/**
+ * 1枚もののCSS。外部のスタイルシートとスクリプトを読まない。
+ * 外へ取りに行くのは記事のサムネイルだけで、それが失敗しても枠が残るだけで済む。
+ *
+ * カード5件と箇条書きに分けるMarkdown版の振り分けは持ち込まない。あれはGitHubが
+ * 表のセルへ罫線を引くことから出た形で（ADR 0023）、ここには効かない制約である。
+ */
+const CLIP_PAGE_STYLE = `
+:root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --link:#0969da; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d; --link:#4493f8; } }
+* { box-sizing: border-box; }
+body { margin:0 auto; padding:24px 16px 64px; max-width:720px; background:var(--bg); color:var(--fg);
+  font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; line-height:1.6; }
+h1 { font-size:1.5rem; margin:0 0 4px; }
+.counts { color:var(--muted); font-size:.875rem; margin:0 0 20px; }
+.clips { list-style:none; margin:0; padding:0; }
+.clip { display:flex; gap:12px; padding:16px 0; border-top:1px solid var(--line); }
+.clip img { width:120px; height:68px; flex:none; object-fit:cover; border-radius:6px; background:var(--line); }
+.body { min-width:0; }
+.title { font-weight:600; margin:0; }
+.excerpt { font-size:.875rem; margin:4px 0 0; }
+.meta { color:var(--muted); font-size:.8125rem; margin:6px 0 0; }
+.dismissed { opacity:.55; }
+.dismissed .title { text-decoration: line-through; }
+a { color:var(--link); text-decoration:none; }
+a:hover { text-decoration:underline; }
+@media (max-width:480px) { .clip img { width:88px; height:50px; } }
+`;
+
+/** 1件ぶんの行。片付け済みは消さず、薄くして取り消し線を引く（ADR 0023と同じ扱い）。 */
+function pageRow(entry: ClipIndexEntry, repo: string): string {
+  const label = escapeHtml(oneLine(entry.title));
+  const href = sourceHref(entry.url);
+  const title = href ? `<a href="${escapeHtml(href)}">${label}</a>` : label;
+  const host = clipHost(entry.url);
+  const meta = [
+    host ? escapeHtml(host) : '',
+    escapeHtml(clippedDay(entry.clippedAt)),
+    `<a href="${escapeHtml(savedCopyUrl(repo, entry.path))}">GitHub版</a>`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const image = sourceHref(entry.imageUrl);
+  const body =
+    `<div class="body"><p class="title">${title}</p>` +
+    (entry.excerpt ? `<p class="excerpt">${escapeHtml(entry.excerpt)}</p>` : '') +
+    `<p class="meta">${meta}</p></div>`;
+  // Referrerを送らない。記事のサムネイルは第三者のサーバーから読むので、
+  // Accessの後ろにあるホスト名をそのまま渡さない。
+  const thumbnail = image
+    ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+    : '';
+  return `<li class="clip${entry.dismissedAt ? ' dismissed' : ''}">${thumbnail}${body}</li>`;
+}
+
+/**
+ * 閲覧ページ全体（ADR 0030）。母集団も並びもMarkdown版と同じものを受け取る。
+ * 読むだけの面なので、片付けなどの操作は置かない。
+ */
+export function renderClipPage(
+  entries: ClipIndexEntry[],
+  counts: ClipIndexCounts,
+  options: ClipPageOptions,
+): string {
+  const list =
+    entries.length === 0
+      ? '<p>まだクリップはない。</p>'
+      : `<ol class="clips">${entries.map((entry) => pageRow(entry, options.repo)).join('')}</ol>`;
+  return (
+    '<!doctype html>\n<html lang="ja">\n<head>\n<meta charset="utf-8">\n' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+    // Accessの後ろにあるのでクローラーは辿り着かない。公開範囲を変えたときのために置く。
+    '<meta name="robots" content="noindex">\n' +
+    `<title>${CLIP_PAGE_TITLE}</title>\n<style>${CLIP_PAGE_STYLE}</style>\n</head>\n<body>\n` +
+    `<h1>${CLIP_PAGE_TITLE}</h1>\n` +
+    `<p class="counts">保存 ${counts.total}件 · まだ片付けていない ${counts.undismissed}件</p>\n` +
+    `${list}\n</body>\n</html>\n`
+  );
 }

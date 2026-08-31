@@ -4,6 +4,7 @@ import {
   type ClipIndexEntry,
   isGeneratedClipIndex,
   renderClipIndex,
+  renderClipPage,
 } from './clip-index-format';
 import { ClipError, logFailure } from './errors';
 import { getGitHubTextFile, putGitHubFile } from './github';
@@ -64,4 +65,15 @@ export async function refreshClipIndexBestEffort(env: Env, path: string): Promis
   } catch (error) {
     logFailure(error, 'github', 'refresh_clip_index', { path });
   }
+}
+
+/**
+ * 閲覧ページのHTMLを組み立てる（ADR 0030）。
+ *
+ * 母集団と並びは`clips/README.md`と同じものを使う。出す範囲を別に選び直すと、
+ * 同じ「新着一覧」がGitHubとWebで食い違っていくため、選び方は1つに保つ。
+ */
+export async function buildClipPage(env: Env): Promise<string> {
+  const [clips, counts] = await Promise.all([selectRecentClips(env), countClips(env)]);
+  return renderClipPage(indexEntries(clips), counts, { repo: env.GITHUB_REPO });
 }
