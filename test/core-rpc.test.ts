@@ -218,6 +218,32 @@ describe('list_clips', () => {
     expect(result).not.toHaveProperty('failed_at');
   });
 
+  it('still returns the items when the match count sits exactly on the limit', async () => {
+    // 境界を`>`で判定している。`>=`にすると、ちょうど上限のときに黙って項目が消える。
+    const { core } = mockTree(Array.from({ length: 100 }, (_, index) => `記事${index}.md`));
+    const result = await call(core, {});
+    expect(result).toMatchObject({ matched: 100 });
+    expect('found' in result && Array.isArray(result.found) ? result.found : []).toHaveLength(100);
+    expect(result).not.toHaveProperty('too_many');
+  });
+
+  it('breaks a tie on clipped_at by path, so the order never depends on tree order', async () => {
+    const { env, core } = mockTree(['ロ.md', 'イ.md']);
+    for (const path of ['clips/ロ.md', 'clips/イ.md']) {
+      await recordClip(env, {
+        path,
+        url: `https://example.com/${encodeURIComponent(path)}`,
+        title: path,
+        excerpt: '',
+        clippedAt: '2026-08-20T00:00:00.000Z',
+      });
+    }
+
+    const result = await call(core, {});
+    const found = 'found' in result && Array.isArray(result.found) ? result.found : [];
+    expect(found.map((clip) => clip.path)).toEqual(['clips/イ.md', 'clips/ロ.md']);
+  });
+
   it('returns the count instead of an arbitrary slice when too many match', async () => {
     const { core } = mockTree(Array.from({ length: 101 }, (_, index) => `記事${index}.md`));
     expect(await call(core, {})).toEqual({ found: [], matched: 101, too_many: true });

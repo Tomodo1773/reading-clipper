@@ -26,6 +26,7 @@ import { renderClipMarkdown } from './markdown';
 import {
   coreToolDescriptions,
   coreToolSchemas,
+  LIST_CLIPS_LIMIT,
 } from './tool-contract';
 import type { ClipRefPayload } from './tool-state';
 import { queueTranslation } from './translate';
@@ -41,9 +42,6 @@ function frontMatterFlag(value: string | undefined): boolean | undefined {
   if (value === 'false') return false;
   return undefined;
 }
-
-/** 該当がこれを超えたら項目を返さず件数だけを返す（ADR 0031）。 */
-const LIST_CLIPS_LIMIT = 100;
 
 /** 保存先パスと、あれば台帳の注釈。検索と一覧が同じ形でrefの発行へ渡す。 */
 interface ClipCandidate {
@@ -63,11 +61,15 @@ function searchSnippet(value: string | undefined): string | undefined {
  * 候補へ台帳の注釈を足す。台帳が落ちても候補そのものは返す（ADR 0020）。
  * D1は母集団ではないので、行が無いことを候補から落とす理由にしない。
  */
-async function annotateClips(env: Env, paths: string[]): Promise<Map<string, FoundClip>> {
+async function annotateClips(
+  env: Env,
+  tool: string,
+  paths: string[],
+): Promise<Map<string, FoundClip>> {
   try {
     return await selectClipsByPath(env, paths);
   } catch (error) {
-    logFailure(error, 'clips', 'clip_annotations');
+    logFailure(error, 'clips', `${tool}_annotations`);
     return new Map();
   }
 }
@@ -85,21 +87,26 @@ function byRecency(a: ClipCandidate, b: ClipCandidate): number {
 
 /** 候補へまとめてrefを発行し、ツールの返り値の形にする。検索と一覧で共通。 */
 async function toFoundClips(env: Env, ownerId: string, candidates: ClipCandidate[]) {
+  // 0件でDurable Objectへ往復しない。検索が空を返すのは日常的な経路である。
+  if (candidates.length === 0) return [];
   const state = env.TOOL_STATE.get(env.TOOL_STATE.idFromName(ownerId));
-  const payloads: ClipRefPayload[] = candidates.map((candidate) => ({
-    path: candidate.path,
+  const clips = candidates.map((candidate) => ({
+    ...candidate,
     title: clipTitle({ path: candidate.path, title: candidate.annotation?.title ?? null }),
   }));
-  const refs = await state.putClips(payloads);
-  return candidates.map((candidate, index) => ({
+  const refs = await state.putClips(
+    clips.map(({ path, title }): ClipRefPayload => ({ path, title })),
+  );
+  return clips.map((clip, index) => ({
+    // `putClips`は渡した数だけ順番どおりに返す。
     clip_ref: refs[index] as string,
-    path: candidate.path,
-    title: payloads[index]?.title as string,
-    url: candidate.annotation?.url ?? undefined,
-    github_url: candidate.githubUrl,
-    clipped_at: candidate.annotation?.clippedAt || undefined,
-    dismissed: candidate.annotation ? candidate.annotation.dismissedAt !== null : null,
-    snippet: candidate.snippet,
+    path: clip.path,
+    title: clip.title,
+    url: clip.annotation?.url ?? undefined,
+    github_url: clip.githubUrl,
+    clipped_at: clip.annotation?.clippedAt || undefined,
+    dismissed: clip.annotation ? clip.annotation.dismissedAt !== null : null,
+    snippet: clip.snippet,
   }));
 }
 
@@ -195,7 +202,7 @@ export async function findClipsTool(env: Env, ownerId: string, rawArgs: unknown)
   const { query } = coreToolSchemas.find_clips.parse(rawArgs);
   try {
     const matches = await searchGitHubCode(env, query);
-    const annotations = await annotateClips(env, matches.map((match) => match.path));
+    const annotations = await annotateClips(env, 'find_clips', matches.map((match) => match.path));
     const found = await toFoundClips(
       env,
       ownerId,
@@ -234,7 +241,7 @@ export async function listClipsTool(env: Env, ownerId: string, rawArgs: unknown)
     return { found: [], matched: matched.length, too_many: true };
   }
 
-  const annotations = await annotateClips(env, matched);
+  const annotations = await annotateClips(env, 'list_clips', matched);
   const candidates = matched
     .map((path) => ({ path, annotation: annotations.get(path) }))
     .sort(byRecency);
