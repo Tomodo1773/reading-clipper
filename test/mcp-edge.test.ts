@@ -8,17 +8,17 @@ const HOST = 'mcp.example.com';
 
 function edgeEnv(overrides: Partial<McpEdgeEnv> = {}) {
   const callTool = vi.fn(async () => ({ found: [] }));
-  const renderClipPage = vi.fn(async () => '<!doctype html>\n<html lang="ja"><body>Clips</body></html>');
+  const clipPage = vi.fn(async () => '<!doctype html>\n<html lang="ja"><body>Clips</body></html>');
   return {
     env: {
-      CORE: { callTool, renderClipPage } as unknown as McpEdgeEnv['CORE'],
+      CORE: { callTool, clipPage } as unknown as McpEdgeEnv['CORE'],
       ACCESS_AUD: AUD,
       ACCESS_ALLOWED_EMAIL: EMAIL,
       MCP_HOSTNAME: HOST,
       ...overrides,
     },
     callTool,
-    renderClipPage,
+    clipPage,
   };
 }
 
@@ -99,7 +99,7 @@ describe('MCP Edge boundary', () => {
   });
 
   it('returns 404 for a path the boundary does not publish', async () => {
-    const { env, callTool, renderClipPage } = edgeEnv();
+    const { env, callTool, clipPage } = edgeEnv();
     const response = await mcpEdge.fetch(
       pageRequest('/clips/extra'),
       env,
@@ -108,7 +108,7 @@ describe('MCP Edge boundary', () => {
 
     expect(response.status).toBe(404);
     expect(callTool).not.toHaveBeenCalled();
-    expect(renderClipPage).not.toHaveBeenCalled();
+    expect(clipPage).not.toHaveBeenCalled();
   });
 
   it('rejects an unexpected Origin', async () => {
@@ -171,7 +171,7 @@ describe('MCP Edge protocol', () => {
 
 describe('MCP Edge clip page', () => {
   it('serves the page Core renders, without touching the tool contract', async () => {
-    const { env, callTool, renderClipPage } = edgeEnv();
+    const { env, callTool, clipPage } = edgeEnv();
     const response = await mcpEdge.fetch(
       pageRequest(),
       env,
@@ -181,21 +181,24 @@ describe('MCP Edge clip page', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('content-security-policy')).toBe(
+      "default-src 'none'; img-src https:; style-src 'unsafe-inline'",
+    );
     expect(await response.text()).toContain('<html lang="ja">');
-    expect(renderClipPage).toHaveBeenCalledWith({ source: 'web', subject: 'access-user-123' });
+    expect(clipPage).toHaveBeenCalledWith({ source: 'web', subject: 'access-user-123' });
     expect(callTool).not.toHaveBeenCalled();
   });
 
   it('does not render the page without an Access context', async () => {
-    const { env, renderClipPage } = edgeEnv();
+    const { env, clipPage } = edgeEnv();
     const response = await mcpEdge.fetch(pageRequest(), env, executionContext());
 
     expect(response.status).toBe(403);
-    expect(renderClipPage).not.toHaveBeenCalled();
+    expect(clipPage).not.toHaveBeenCalled();
   });
 
   it('rejects an unexpected Host on the page as well', async () => {
-    const { env, renderClipPage } = edgeEnv();
+    const { env, clipPage } = edgeEnv();
     const response = await mcpEdge.fetch(
       pageRequest('/clips', { host: 'attacker.example.com' }),
       env,
@@ -203,6 +206,6 @@ describe('MCP Edge clip page', () => {
     );
 
     expect(response.status).not.toBe(200);
-    expect(renderClipPage).not.toHaveBeenCalled();
+    expect(clipPage).not.toHaveBeenCalled();
   });
 });

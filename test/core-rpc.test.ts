@@ -112,7 +112,7 @@ describe('Core MCP RPC', () => {
   it('rejects an invalid audit context before rendering the clip page', async () => {
     const env = makeEnv();
     await expect(
-      CoreMcpEntrypoint.prototype.renderClipPage.call({ env } as unknown as CoreMcpEntrypoint, {
+      CoreMcpEntrypoint.prototype.clipPage.call({ env } as unknown as CoreMcpEntrypoint, {
         source: 'web',
         subject: '',
       }),
@@ -129,7 +129,7 @@ describe('Core MCP RPC', () => {
       clippedAt: '2026-08-24T00:00:00.000Z',
     });
 
-    const html = await CoreMcpEntrypoint.prototype.renderClipPage.call(
+    const html = await CoreMcpEntrypoint.prototype.clipPage.call(
       { env } as unknown as CoreMcpEntrypoint,
       { source: 'web', subject: 'access-user-123' },
     );

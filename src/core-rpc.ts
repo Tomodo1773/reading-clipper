@@ -24,13 +24,15 @@ export interface McpAuditContext {
   subject: string;
 }
 
-const AUDIT_SOURCES: readonly string[] = ['mcp', 'web'];
-
 /**
  * 呼び出し元がAccessを通っていることの印だけを確かめる。ownerは常に自分の設定から取る。
+ *
+ * `source`の取りうる値は実行時に照合しない。認可に使わないと決めた値を数え上げても
+ * 守れるものが増えず、型と実行時で一覧を二重に持つことになるためである。
  */
 function requireAudit(audit: McpAuditContext): void {
-  if (!AUDIT_SOURCES.includes(audit?.source) || typeof audit?.subject !== 'string' || !audit.subject) {
+  const filled = (value: unknown) => typeof value === 'string' && value !== '';
+  if (!filled(audit?.source) || !filled(audit?.subject)) {
     throw new Error('invalid audit context');
   }
 }
@@ -70,7 +72,7 @@ export class CoreMcpEntrypoint extends WorkerEntrypoint<Env> {
    * `callTool`は外部MCPクライアントへ公開するツールを通す口である。画面のための
    * 取得をそこへ足すと、別のSlack Botに「一覧を返すツール」が生えることになる。
    */
-  async renderClipPage(audit: McpAuditContext): Promise<string> {
+  async clipPage(audit: McpAuditContext): Promise<string> {
     requireAudit(audit);
     return buildClipPage(this.env);
   }

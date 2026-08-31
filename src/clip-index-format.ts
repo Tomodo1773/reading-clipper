@@ -193,7 +193,7 @@ h1 { font-size:1.5rem; margin:0 0 4px; }
 .clips { list-style:none; margin:0; padding:0; }
 .clip { display:flex; gap:12px; padding:16px 0; border-top:1px solid var(--line); }
 .clip img { width:120px; height:68px; flex:none; object-fit:cover; border-radius:6px; background:var(--line); }
-.body { min-width:0; }
+.text { min-width:0; }
 .title { font-weight:600; margin:0; }
 .excerpt { font-size:.875rem; margin:4px 0 0; }
 .meta { color:var(--muted); font-size:.8125rem; margin:6px 0 0; }
@@ -219,7 +219,7 @@ function pageRow(entry: ClipIndexEntry, repo: string): string {
     .join(' · ');
   const image = sourceHref(entry.imageUrl);
   const body =
-    `<div class="body"><p class="title">${title}</p>` +
+    `<div class="text"><p class="title">${title}</p>` +
     (entry.excerpt ? `<p class="excerpt">${escapeHtml(entry.excerpt)}</p>` : '') +
     `<p class="meta">${meta}</p></div>`;
   // Referrerを送らない。記事のサムネイルは第三者のサーバーから読むので、

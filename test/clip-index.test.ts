@@ -344,6 +344,18 @@ describe('renderClipPage', () => {
     expect(html).toContain('保存 1件 · まだ片付けていない 1件');
   });
 
+  it('does not hand the page hostname to the sites the thumbnails come from', () => {
+    const html = renderClipPage(
+      [entry({ imageUrl: 'https://img.example.com/a.png' })],
+      counts(1, 1),
+      page,
+    );
+
+    expect(html).toContain(
+      '<img src="https://img.example.com/a.png" alt="" loading="lazy" referrerpolicy="no-referrer">',
+    );
+  });
+
   it('escapes HTML that came in with the excerpt, title and image URL', () => {
     const html = renderClipPage(
       [

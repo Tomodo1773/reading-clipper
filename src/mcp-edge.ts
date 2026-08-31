@@ -70,6 +70,16 @@ const MCP_PATH = '/mcp';
 /** 自分がブラウザから開く読み取り専用の新着一覧（ADR 0030）。 */
 const CLIP_PAGE_PATH = '/clips';
 
+/**
+ * 閲覧ページの防御をエスケープ1枚に頼らない（ADR 0030）。
+ *
+ * 抜粋は記事本文から作る外部由来の文字列で、エスケープを外すと注入になる。このページは
+ * スクリプトを1行も持たず、外へ読みに行くのはサムネイルだけなので、`script-src`を落として
+ * おけばエスケープが漏れても実行に繋がらない。CSSは`<style>`で埋めているため`style-src`
+ * だけはinlineを許す。
+ */
+const CLIP_PAGE_CSP = "default-src 'none'; img-src https:; style-src 'unsafe-inline'";
+
 export default {
   async fetch(request: Request, env: McpEdgeEnv, ctx: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
@@ -85,11 +95,12 @@ export default {
     const subject = await getAccessSubject(ctx.access, env);
     if (!subject) return new Response('Forbidden', { status: 403 });
     if (pathname === CLIP_PAGE_PATH) {
-      return new Response(await env.CORE.renderClipPage({ source: 'web', subject }), {
+      return new Response(await env.CORE.clipPage({ source: 'web', subject }), {
         headers: {
           'content-type': 'text/html; charset=utf-8',
           // Accessの後ろにある個人的な一覧なので、共有キャッシュにも履歴にも残さない。
           'cache-control': 'private, no-store',
+          'content-security-policy': CLIP_PAGE_CSP,
         },
       });
     }
