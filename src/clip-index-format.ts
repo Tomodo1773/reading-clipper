@@ -76,6 +76,12 @@ function clippedDay(clippedAt: string): string {
   return `${jst.getUTCMonth() + 1}/${jst.getUTCDate()}`;
 }
 
+/** `clips/README.md`から同じディレクトリの保存済みMarkdownへ移動する相対リンク。 */
+function savedCopyHref(path: string): string {
+  const relativePath = path.startsWith('clips/') ? path.slice('clips/'.length) : path;
+  return `./${relativePath.split('/').map(encodeURIComponent).join('/')}`;
+}
+
 /** 題名。URLが無い、または不正な古いデータはリンクにしない（ADR 0017）。 */
 function titleLink(entry: ClipIndexEntry): string {
   const label = escapeHtml(markdownLabel(entry.title));
@@ -94,7 +100,8 @@ function card(entry: ClipIndexEntry): string {
   const image = sourceHref(entry.imageUrl);
   const host = clipHost(entry.url);
   // 区切りは箇条書きと同じ`·`にする。同じ意味のものを2種類の記号で書き分けない。
-  const meta = [host ? `\`${host}\`` : '', clippedDay(entry.clippedAt)]
+  const saved = `[GitHub版](<${savedCopyHref(entry.path)}>)`;
+  const meta = [host ? `\`${host}\`` : '', clippedDay(entry.clippedAt), saved]
     .filter(Boolean)
     .join(' · ');
   const lines: string[] = [];
@@ -109,7 +116,8 @@ function card(entry: ClipIndexEntry): string {
 function listRow(entry: ClipIndexEntry): string {
   const link = titleLink(entry);
   const label = entry.dismissedAt ? `~~${link}~~` : link;
-  return `- ${[clippedDay(entry.clippedAt), label, clipHost(entry.url)].filter(Boolean).join(' · ')}`;
+  const saved = `[GitHub版](<${savedCopyHref(entry.path)}>)`;
+  return `- ${[clippedDay(entry.clippedAt), label, clipHost(entry.url), saved].filter(Boolean).join(' · ')}`;
 }
 
 export function renderClipIndex(entries: ClipIndexEntry[], counts: ClipIndexCounts): string {

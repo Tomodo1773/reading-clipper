@@ -29,6 +29,8 @@ export interface ClipRow {
 export interface DigestClip extends ClipRow {
   excerpt: string | null;
   imageUrl: string | null;
+  /** 実在確認でGitHubが返した保存済みMarkdownのURL。D1には保存しない。 */
+  githubUrl?: string;
 }
 
 /** 検索で見つけたクリップ。片付いているかどうかも返す（ADR 0016）。 */

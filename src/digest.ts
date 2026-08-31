@@ -46,11 +46,10 @@ function escapeMrkdwn(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function clipHref(env: Env, clip: DigestClip): string {
+function clipHref(clip: DigestClip): string | undefined {
   // `<url|ラベル>`は最初の`|`で切れる。URLの`|`はWHATWGのシリアライズで残るので自分で潰す。
   if (clip.url) return clip.url.replace(/\|/g, '%7C');
-  const encoded = clip.path.split('/').map(encodeURIComponent).join('/');
-  return `https://github.com/${env.GITHUB_REPO}/blob/main/${encoded}`;
+  return clip.githubUrl;
 }
 
 /**
@@ -81,13 +80,21 @@ function headBlocks(count: number): AnyMessageBlock[] {
 function clipBlocks(env: Env, clip: DigestClip, index: number): AnyMessageBlock[] {
   const id = clipBlockId(index);
   const title = clipTitle(clip);
-  const link = `*<${escapeMrkdwn(clipHref(env, clip))}|${escapeMrkdwn(title)}>*`;
+  const href = clipHref(clip);
+  const link = href
+    ? `*<${escapeMrkdwn(href)}|${escapeMrkdwn(title)}>*`
+    : `*${escapeMrkdwn(title)}*`;
+  // 題名はこれまでどおり元記事へ向け、保存したMarkdownは小さな副リンクにする。
+  // URLの無いバックフィル行は題名自体がGitHubを向くので重ねて出さない。
+  const saved = clip.url && clip.githubUrl
+    ? ` ・ <${escapeMrkdwn(clip.githubUrl)}|GitHub版>`
+    : '';
   const excerpt = clip.excerpt ? `\n${escapeMrkdwn(clip.excerpt)}` : '';
   const meta = [clipHost(clip.url), savedAt(clip.clippedAt)].filter(Boolean).join(' ・ ');
   const section: SectionBlock = {
     type: 'section',
     block_id: id,
-    text: { type: 'mrkdwn', text: `${link}${excerpt}` },
+    text: { type: 'mrkdwn', text: `${link}${saved}${excerpt}` },
   };
   // alt_textは1文字以上が要る。パスからも題名が取れないことは無いが、念のため埋める。
   if (clip.imageUrl) {
@@ -133,7 +140,22 @@ export function digestText(count: number): string {
  */
 export async function keepExistingClips(env: Env, clips: DigestClip[]): Promise<DigestClip[]> {
   const checked = await Promise.all(
-    clips.map(async (clip) => ({ clip, exists: await stillOnGitHub(env, clip.path) })),
+    clips.map(async (clip) => {
+      try {
+        const file = await getGitHubFile(env, clip.path);
+        return {
+          clip: file ? { ...clip, githubUrl: file.htmlUrl } : clip,
+          exists: file !== undefined,
+        };
+      } catch (error) {
+        const clipError = asClipError(error, 'github');
+        console.warn(
+          JSON.stringify({ stage: clipError.stage, message: clipError.message, path: clip.path }),
+        );
+        // 確認できないことを「無い」と扱わない。GitHub版のURLだけを出さず、行は残す。
+        return { clip, exists: true };
+      }
+    }),
   );
   // 消すのはADR 0016と同じ1行ずつの削除。ここで消える件数は多くて数件なので、
   // まとめて消す専用のクエリを別に持たない。
@@ -141,25 +163,6 @@ export async function keepExistingClips(env: Env, clips: DigestClip[]): Promise<
     checked.filter((entry) => !entry.exists).map((entry) => deleteClip(env, entry.clip.path)),
   );
   return checked.filter((entry) => entry.exists).map((entry) => entry.clip);
-}
-
-/**
- * GitHubにファイルが残っているか。
- *
- * **falseを返すのは404を見たときだけにする。** 認証の失敗もタイムアウトも5xxも「不明」であって
- * 「無い」ではない。確認できなかったことを削除の根拠にすると、GitHubが不調な週に台帳が削れる。
- * 確認が落ちた週はゴーストが1回出るが、それは次の週に取り返せる。消した行は戻らない。
- */
-async function stillOnGitHub(env: Env, path: string): Promise<boolean> {
-  try {
-    return (await getGitHubFile(env, path)) !== undefined;
-  } catch (error) {
-    const clipError = asClipError(error, 'github');
-    console.warn(
-      JSON.stringify({ stage: clipError.stage, message: clipError.message, path }),
-    );
-    return true;
-  }
 }
 
 /**

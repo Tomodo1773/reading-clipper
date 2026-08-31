@@ -57,7 +57,7 @@ describe('renderClipIndex', () => {
         '## 最近のクリップ\n\n' +
         '**[Worker \\[設計\\]](<https://zenn.dev/alice/articles/worker>)**\n' +
         '\n' +
-        '`zenn.dev` · 8/19\n',
+        '`zenn.dev` · 8/19 · [GitHub版](<./Worker%20%E8%A8%AD%E8%A8%88.md>)\n',
     );
   });
 
@@ -75,7 +75,10 @@ describe('renderClipIndex', () => {
   });
 
   it('drops an image whose URL is not http(s)', () => {
-    const rendered = renderClipIndex([entry({ imageUrl: 'javascript:alert(1)' })], counts(1, 1));
+    const rendered = renderClipIndex(
+      [entry({ imageUrl: 'javascript:alert(1)' })],
+      counts(1, 1),
+    );
 
     expect(rendered).not.toContain('<img');
     expect(rendered).not.toContain('javascript:');
@@ -110,8 +113,12 @@ describe('renderClipIndex', () => {
     expect(cards).toContain('記事5');
     expect(cards).not.toContain('記事6');
     // 箇条書きは元の並び順のまま。片付けたものだけ取り消し線で消す。
-    expect(list).toContain('- 8/19 · ~~[記事1](<https://zenn.dev/alice/articles/1>)~~ · zenn.dev');
-    expect(list).toContain('- 8/14 · [記事6](<https://zenn.dev/alice/articles/6>) · zenn.dev');
+    expect(list).toContain(
+      '- 8/19 · ~~[記事1](<https://zenn.dev/alice/articles/1>)~~ · zenn.dev · [GitHub版](<./%E8%A8%98%E4%BA%8B1.md>)',
+    );
+    expect(list).toContain(
+      '- 8/14 · [記事6](<https://zenn.dev/alice/articles/6>) · zenn.dev · [GitHub版](<./%E8%A8%98%E4%BA%8B6.md>)',
+    );
   });
 
   it('omits the card section when every recent clip is dismissed', () => {
@@ -141,6 +148,9 @@ describe('renderClipIndex', () => {
 
     expect(rendered).toContain('**記事 (1)**');
     expect(rendered).not.toContain('not a URL');
+    expect(rendered).toContain(
+      '[GitHub版](<./qiita.com/%E8%A8%98%E4%BA%8B%20(1).md>)',
+    );
   });
 
   it('counts the whole shelf, not just the clips it shows', () => {
