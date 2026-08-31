@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { buildClipPage } from './clip-index';
+import { buildClipPage } from './clip-page';
 import type { CoreToolName } from './tool-contract';
 import {
   deleteClipTool,

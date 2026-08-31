@@ -42,8 +42,6 @@ interface Recorded {
   savedMarkdown: string;
   /** PUTに載ったsha。新規作成なら空のまま。 */
   savedSha: string;
-  /** 保存後に再生成されたclips/README.md。 */
-  indexMarkdown: string;
   /** 本文の取得が何回走ったか。ロードと保存で二重に取っていないことを見る。 */
   articleFetches: number;
   /** GitHubへDELETEが飛んだパス。飛んでいなければ空のまま（ADR 0016）。 */
@@ -68,7 +66,6 @@ function mockWorld(
     savedPath: '',
     savedMarkdown: '',
     savedSha: '',
-    indexMarkdown: '',
     articleFetches: 0,
     deletedPath: '',
     deletedSha: '',
@@ -100,14 +97,9 @@ function mockWorld(
     }
     if (url.includes('/repos/example/clips/contents/') && method === 'PUT') {
       const body = JSON.parse(String(init?.body));
-      const path = decodeURIComponent(url.split('/contents/')[1] ?? '');
-      if (path === 'clips/README.md') {
-        recorded.indexMarkdown = base64ToUtf8(body.content);
-      } else {
-        recorded.savedPath = path;
-        recorded.savedMarkdown = base64ToUtf8(body.content);
-        recorded.savedSha = body.sha ?? '';
-      }
+      recorded.savedPath = decodeURIComponent(url.split('/contents/')[1] ?? '');
+      recorded.savedMarkdown = base64ToUtf8(body.content);
+      recorded.savedSha = body.sha ?? '';
       return jsonResponse(
         { content: { sha: 'new-sha', html_url: 'https://github.com/example/clips/blob/main/clip.md' } },
         201,
@@ -212,9 +204,6 @@ describe('chat turn', () => {
     expect(recorded.savedPath).toBe('clips/Worker設計.md');
     expect(recorded.savedMarkdown).toContain('## 概要\n\nQueueで重い処理を分離する。');
     expect(recorded.savedMarkdown).not.toContain('要するに重い処理はQueueへ分けなさい');
-    expect(recorded.indexMarkdown).toContain(
-      '[Worker設計](<https://qiita.com/alice/items/abc>)',
-    );
 
     // 本文が会話に現れるのはロードの1回だけ。保存の結果には入れない（ADR 0012）。
     const load = toolOutput(turn.appended, 'load_content');
@@ -315,22 +304,24 @@ describe('chat turn', () => {
     expect(recorded.savedMarkdown).toContain('Queueで重い処理を分離する。');
   });
 
-  it('keeps the clip save successful when the generated index update fails', async () => {
+  // 台帳は正本ではなく注釈なので、書けなくても保存そのものは成立させる（ADR 0017）。
+  it('keeps the clip save successful when the ledger write fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const recorded = mockWorld(
-      [
-        loadCallReply('https://qiita.com/alice/items/abc'),
-        saveCallReply('https://qiita.com/alice/items/abc'),
-        modelResponse([{ text: '記事は保存してあるわ。' }]),
-      ],
-      (url, method) =>
-        url.endsWith('/contents/clips/README.md') && method === 'PUT'
-          ? jsonResponse({ message: 'boom' }, 500)
-          : undefined,
-    );
+    const recorded = mockWorld([
+      loadCallReply('https://qiita.com/alice/items/abc'),
+      saveCallReply('https://qiita.com/alice/items/abc'),
+      modelResponse([{ text: '記事は保存してあるわ。' }]),
+    ]);
 
     const turn = await runChatTurn({
-      env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }),
+      env: makeEnv({
+        GITHUB_APP_PRIVATE_KEY: privateKeyPem,
+        CLIPS: {
+          prepare() {
+            throw new Error('D1 is unavailable');
+          },
+        } as unknown as D1Database,
+      }),
       history: [],
       userText: 'https://qiita.com/alice/items/abc',
       receivedAt: RECEIVED_AT,
@@ -338,8 +329,7 @@ describe('chat turn', () => {
 
     expect(toolOutput(turn.appended, 'save_loaded')).toMatchObject({ saved: true });
     expect(recorded.savedPath).toBe('clips/Worker設計.md');
-    expect(recorded.indexMarkdown).toBe('');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('refresh_clip_index'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('save_loaded'));
   });
 
   /**
@@ -948,9 +938,7 @@ describe('deleting a clip', () => {
 
   /** GitHubにファイルが在る世界。GETがshaを返し、DELETEはmockWorldの既定が受ける。 */
   const fileExists = (url: string, method: string): Response | undefined =>
-    url.includes('/repos/example/clips/contents/') &&
-    !url.endsWith('/contents/clips/README.md') &&
-    method === 'GET'
+    url.includes('/repos/example/clips/contents/') && method === 'GET'
       ? jsonResponse({
           sha: 'old-sha',
           html_url: 'https://github.com/example/clips/blob/main/clip.md',
@@ -1012,7 +1000,6 @@ describe('deleting a clip', () => {
     // 引いたshaをそのまま返す。取り違えるとGitHubが409で拒否する。
     expect(recorded.deletedPath).toBe(CLIP_PATH);
     expect(recorded.deletedSha).toBe('old-sha');
-    expect(recorded.indexMarkdown).toContain('まだクリップはない。');
     expect(await countClips()).toBe(0);
   });
 

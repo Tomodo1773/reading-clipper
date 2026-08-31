@@ -18,7 +18,6 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { isGeneratedClipIndex } from '../src/clip-index-format.ts';
 import { clipExcerpt } from '../src/excerpt.ts';
 import { parseClipFrontMatter } from '../src/front-matter.ts';
 import { findOgImage } from '../src/html.ts';
@@ -110,7 +109,10 @@ const clips: Clip[] = [];
 for (const file of files) {
   const source = await readFile(file, 'utf8');
   const path = `clips/${relative(clipsDir, file).split(sep).join('/')}`;
-  if (isGeneratedClipIndex(path, source)) continue;
+  // clips/README.mdはフォルダのREADMEで、記事ではない（ADR 0032）。Workerは同じ判断を
+  // `src/github.ts`の`CLIPS_README_PATH`で持つが、このスクリプトは素のESMで走るため、
+  // 拡張子の無い相対importを持つモジュールからは読めない。パスをここに書く。
+  if (path === 'clips/README.md') continue;
   const { fields, body } = parseClipFrontMatter(source);
   clips.push({
     // D1のキーはリポジトリ内のパス。Windowsの`\`はここで`/`へ寄せる。

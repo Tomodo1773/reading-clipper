@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CoreMcpEntrypoint } from '../src/core-rpc';
-import { recordClip } from '../src/clips';
+import { recordClip, setClipDismissed } from '../src/clips';
 import { resetGitHubTokenCache } from '../src/github';
 import { utf8ToBase64 } from '../src/utils';
 import { generatePrivateKeyPem, jsonResponse, makeEnv, resetClips } from './helpers';
@@ -129,6 +129,16 @@ describe('Core MCP RPC', () => {
       clippedAt: '2026-08-24T00:00:00.000Z',
     });
 
+    // 片付けの印はD1で別名にして読む。ここまで通して、2段への振り分けを確かめる。
+    await recordClip(env, {
+      path: 'clips/読み終えた記事.md',
+      url: 'https://example.com/done',
+      title: '読み終えた記事',
+      excerpt: '片付けた側の抜粋',
+      clippedAt: '2026-08-23T00:00:00.000Z',
+    });
+    await setClipDismissed(env, 'clips/読み終えた記事.md', true, '2026-08-25T00:00:00.000Z');
+
     const html = await CoreMcpEntrypoint.prototype.clipPage.call(
       { env } as unknown as CoreMcpEntrypoint,
       { source: 'web', subject: 'access-user-123' },
@@ -136,7 +146,11 @@ describe('Core MCP RPC', () => {
 
     expect(html).toContain('<a href="https://example.com/edge">公開境界</a>');
     expect(html).toContain('Edgeは認証と受け渡しだけを持つ。');
-    expect(html).toContain('保存 1件 · まだ片付けていない 1件');
+    expect(html).toContain('まだ片付けていない（1件）');
+    expect(html).toContain('片付けたもの（1件）');
+    expect(html).toContain('<a href="https://example.com/done">読み終えた記事</a>');
+    // 片付けた側は取りに来る面なので、抜粋を出さない。
+    expect(html).not.toContain('片付けた側の抜粋');
   });
 });
 

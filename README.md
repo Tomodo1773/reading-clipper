@@ -8,7 +8,7 @@ SlackへURLを送るだけで、記事の保存・要約・再発見までをま
 
 Reading Clipperは、アプリやブラウザの共有メニューからSlackへ送ったURLを読み取り、Markdownとしてprivate GitHubリポジトリへ保存するサービス。保存直後にAIが内容を短く要約し、同じSlackスレッドで記事について質問できる。
 
-読まないと決めた記事は、保存直後の返信に付くボタンでその場で片付けられる。片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れる。クリップ、会話、整理の操作はSlackだけで完結する。新着一覧だけは、GitHubを開かずに眺められる読み取り専用のWebページからも見られる。
+読まないと決めた記事は、保存直後の返信に付くボタンでその場で片付けられる。片付けていないクリップは毎週Slackへ再掲されるため、保存したまま忘れがちな記事にも自然に戻れる。クリップ、会話、整理の操作はSlackだけで完結する。まだ片付けていないクリップの一覧だけは、GitHubを開かずに眺められる読み取り専用のWebページからも見られる。
 
 ## 開発の背景
 
@@ -32,10 +32,10 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   記事本文と出典情報をMarkdownへ整え、GitHub App経由で指定したprivateリポジトリへ保存。
 - **日本語でない記事は保存の後で日本語へ**
   AIが本文を読んだ時点で日本語以外だと分かった記事は、保存の直後に翻訳を積み、本文を訳文へ置き換える。クリップの返信を待たせないよう非同期で走るため、ファイルが日本語になるのは保存の数分後になる。原文は同じパスの1つ前のコミットに残り、題名とファイル名は原題のまま変えない（[ADR 0027](docs/adr/0027-translate-clips-into-japanese-after-saving.md)）。
-- **最近保存したクリップをGitHubで一覧**
-  保存先の`clips/README.md`へ最新20件を新しい順で自動表示。まだ片付けていない上位5件はサムネイルと冒頭の抜粋を添えたカードで並べ、それ以前は箇条書きにする。片付けたクリップは取り消し線で消し、見出しには保存総数と残りの件数を出す。タイトルから元の記事へ、各行の「GitHub版」から保存済みMarkdownへ移動できる。週次ダイジェストにも同じ副リンクを出す。記事のファイル名は日付で長くせずタイトルのまま保つ。
-- **同じ一覧をブラウザからも見る**
-  同じ内容を、認証付きの読み取り専用Webページとしても出す。GitHubを開かずに、ログインできない環境からも眺められる。母集団と並びは`clips/README.md`と同じものを使い、レイアウトだけHTMLに合わせて組み直す。操作は置かず、片付けはSlackのまま（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
+- **まだ片付けていないクリップを、ブラウザで全件見る**
+  認証付きの読み取り専用Webページに、まだ片付けていないクリップを**全件**、新しい順で並べる。サムネイルと冒頭の抜粋、ホスト、保存日を添え、タイトルから元の記事へ、「GitHub版」から保存済みMarkdownへ移動できる。件数で切らないので、古い在庫が一覧から落ちない（[ADR 0032](docs/adr/0032-clip-page-shows-the-backlog-not-the-newest.md)）。GitHubを開かずに、ログインできない環境からも眺められる（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
+- **片付けたクリップは、その下に1行ずつ全件**
+  読み終えた記事のURLを後から取りに来るための面。サムネイルと抜粋は出さず、題名・保存日・ホスト・「GitHub版」だけを1行で並べる。スクリプトを持たない1枚のページなので、全件があればブラウザの検索でそのまま引ける。操作は置かず、片付けはSlackのまま。記事のファイル名は日付で長くせずタイトルのまま保つ。
 - **保存済みクリップを本文から探して読み返す**
   Slackで覚えている語を伝えると、GitHub上の本文から最大5件の候補を探し、選んだMarkdownだけを読んで質問へ答える。D1に記録が無いクリップも検索でき、削除済みの古い検索結果は本文を読む直前の実在確認で止める。本文検索はGitHubのコード検索索引に依存するため、0件でも「保存されていない」ことの根拠にはしない。
 - **題名を言えるクリップは、索引の状態によらず必ず見つける**
@@ -51,7 +51,7 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
 
 保存、要約、記事についての会話、週次通知、片付けまでをSlackへ集約。新しい操作画面を覚える必要がない。
 
-Webに出すのは新着一覧の閲覧だけで、そこにボタンは置かない。読むための入口は増やすが、状態を変える操作はSlackから動かさない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
+Webに出すのはクリップ一覧の閲覧だけで、そこにボタンは置かない。読むための入口は増やすが、状態を変える操作はSlackから動かさない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
 
 ### Cloudflare Workersによる軽快な応答
 
@@ -83,7 +83,7 @@ Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、公開
 
 MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、EdgeへCustom Domainを手動設定し、そのhostname全体をAccess applicationで保護してManaged OAuthを有効にする。EdgeはCloudflareが検証済みの`ctx.access`からaudienceと本人identityを確認する。必要な実環境値は`ACCESS_AUD`、`ACCESS_ALLOWED_EMAIL`、`MCP_HOSTNAME`で、Coreの業務secretは渡さない。`workers.dev`とpreview URLは無効化している。
 
-このWorkerは`/mcp`のほかに、新着一覧の閲覧ページ`/clips`を持つ。同じCustom Domain、同じAccess applicationの後ろに置き、認証は共通。EdgeはAccessで確認した本人であることだけを確かめてCoreへRPCを投げ、HTMLの組み立てはCore側で行う。Edgeにクリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。ページはブラウザから開くだけなのでManaged OAuthは経由しない。
+このWorkerは`/mcp`のほかに、クリップの閲覧ページ`/clips`を持つ。同じCustom Domain、同じAccess applicationの後ろに置き、認証は共通。EdgeはAccessで確認した本人であることだけを確かめてCoreへRPCを投げ、HTMLの組み立てはCore側で行う。Edgeにクリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。ページはブラウザから開くだけなのでManaged OAuthは経由しない。
 
 `ACCESS_AUD`にはAccess applicationのaudience tag、`ACCESS_ALLOWED_EMAIL`には許可する本人のemail、`MCP_HOSTNAME`にはschemeを含まないCustom Domainのhostnameを設定する。Custom Domain、Access application / policy / Managed OAuth、MCP Edge用のWorkers Builds接続は実環境で手動設定する。
 
@@ -164,7 +164,8 @@ pnpm dry-run
 - XはAPIから取得できる公開Postだけを対象とし、protected contentは保存しない。
 - 週次ダイジェストは「読んだか」ではなく「片付けたか」だけを管理。
 - 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しない。閲覧ページもCloudflare Accessで本人だけに限定し、公開しない。
-- 閲覧ページは読み取り専用で、片付けなどの操作は持たない。
+- 閲覧ページは読み取り専用で、片付けなどの操作は持たない。件数で切らないため、保存が増えるとページも伸びる。
+- `clips/README.md`は自動生成しない。GitHub上のクリップ一覧は名前順のファイル一覧だけで、新着や片付けの状態は閲覧ページで見る。
 - 削除は既定ブランチの先頭からファイルを消すだけで、本文はGitの履歴に残る。取り消しは`git revert`で行う。
 - 翻訳は保存済みの本文を訳文で置き換える形で行い、原文はGitの履歴にだけ残る。訳し漏れたクリップは元の言語のまま残り、訳し直す導線は「同じURLをもう一度送る」だけ。
 
@@ -188,3 +189,4 @@ pnpm dry-run
 - [日本語でないクリップは、保存の後で本文を日本語へ置き換える](docs/adr/0027-translate-clips-into-japanese-after-saving.md)
 - [新着一覧を、公開境界Workerの読み取り専用ページとしても出す](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)
 - [題名での在否確認は、二次索引ではなくファイル一覧で行う](docs/adr/0031-list-clips-from-the-file-tree.md)
+- [新着一覧をやめ、閲覧ページを在庫の面にする](docs/adr/0032-clip-page-shows-the-backlog-not-the-newest.md)

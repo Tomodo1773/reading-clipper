@@ -1,6 +1,6 @@
 # ADR 0029: ダイジェストと新着一覧から全クリップのGitHub版へリンクする
 
-- ステータス: Accepted
+- ステータス: Accepted（`clips/README.md`への副リンクは[ADR 0032](0032-clip-page-shows-the-backlog-not-the-newest.md)で廃止。週次ダイジェストと閲覧ページの副リンクは継続）
 - 日付: 2026-08-31
 
 ## 背景

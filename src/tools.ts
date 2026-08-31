@@ -1,20 +1,19 @@
 import type { GoogleGenerativeAIProvider } from '@ai-sdk/google';
 import { tool } from 'ai';
-import { refreshClipIndexBestEffort } from './clip-index';
-import { isGeneratedClipIndex } from './clip-index-format';
 import {
   clipTitle,
   deleteClip,
   type FoundClip,
   recordClip,
   selectClipsByPath,
+  setClipDismissed,
 } from './clips';
-import { applyClipDismissal } from './dismiss';
 import { logFailure } from './errors';
 import { clipExcerpt } from './excerpt';
 import { loadContent, truncateContent } from './fetchers';
 import { parseClipFrontMatter } from './front-matter';
 import {
+  CLIPS_README_PATH,
   deleteGitHubFile,
   getGitHubFile,
   getGitHubTextFile,
@@ -75,7 +74,7 @@ async function annotateClips(
 }
 
 /**
- * `clipped_at`の新しい順、同着はパス昇順。`selectRecentClips`と同じ規則で、
+ * `clipped_at`の新しい順、同着はパス昇順。`selectAllClips`と同じ規則で、
  * 台帳に行が無いクリップは`clippedAt`を持たないため末尾に来る（ADR 0031）。
  */
 function byRecency(a: ClipCandidate, b: ClipCandidate): number {
@@ -121,6 +120,8 @@ async function saveLoaded(
   const saved = await putGitHubFile(env, path, renderClipMarkdown(content, receivedAt), {
     sha: existing?.sha,
   });
+  // 台帳は正本ではなく注釈なので、書けなくても保存そのものは成立させる（ADR 0017）。
+  // 記事はGitHubに在り、D1はバックフィルで作り直せる。
   try {
     await recordClip(env, {
       path,
@@ -130,7 +131,6 @@ async function saveLoaded(
       imageUrl: content.imageUrl,
       clippedAt: receivedAt,
     });
-    await refreshClipIndexBestEffort(env, path);
   } catch (error) {
     logFailure(error, 'clips', 'save_loaded', { path });
   }
@@ -191,7 +191,7 @@ export async function saveLoadedTool(env: Env, ownerId: string, receivedAt: stri
 export async function setClipDismissedTool(env: Env, receivedAt: string, rawArgs: unknown) {
   const { path, dismissed } = coreToolSchemas.set_clip_dismissed.parse(rawArgs);
   try {
-    const found = await applyClipDismissal(env, { path, dismissed, at: receivedAt });
+    const found = await setClipDismissed(env, path, dismissed, receivedAt);
     return found ? { updated: true, path, dismissed } : { updated: false, unknown_path: path };
   } catch (error) {
     return { updated: false, failed_at: logFailure(error, 'clips', 'set_clip_dismissed') };
@@ -256,7 +256,7 @@ export async function readClipTool(env: Env, ownerId: string, rawArgs: unknown) 
   const clip = resolved.payload;
   try {
     const file = await getGitHubTextFile(env, clip.path);
-    if (!file || isGeneratedClipIndex(clip.path, file.content)) {
+    if (!file) {
       return { found: false, missing: true, clip_ref: ref };
     }
     const { fields, body } = parseClipFrontMatter(file.content);
@@ -295,7 +295,6 @@ export async function deleteClipTool(env: Env, ownerId: string, rawArgs: unknown
   }
   try {
     await deleteClip(env, clip.path);
-    await refreshClipIndexBestEffort(env, clip.path);
   } catch (error) {
     logFailure(error, 'clips', 'delete_clip', { path: clip.path });
   }
