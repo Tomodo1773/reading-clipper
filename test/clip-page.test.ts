@@ -45,6 +45,16 @@ describe('renderClipPage', () => {
     expect(html).toContain('zenn.dev · 8/19');
   });
 
+  it('puts a compact dismiss form only on an undismissed card', () => {
+    const html = renderClipPage([entry()], page);
+
+    expect(html).toContain('<form class="dismiss-form" method="post" action="/clips/dismiss">');
+    expect(html).toContain(
+      '<input type="hidden" name="path" value="clips/Worker 設計.md">',
+    );
+    expect(html).toContain('aria-label="「Worker [設計]」を片付ける">片付ける</button>');
+  });
+
   it('does not hand the page hostname to the sites the thumbnails come from', () => {
     const html = renderClipPage([entry({ imageUrl: 'https://img.example.com/a.png' })], page);
 
@@ -57,6 +67,7 @@ describe('renderClipPage', () => {
     const html = renderClipPage(
       [
         entry({
+          path: 'clips/a"><img src=x>.md',
           title: '<script>alert(1)</script>',
           excerpt: '本文に<b>タグ</b>が混じる',
           imageUrl: 'https://img.example.com/a.png?a=1&b="2"',
@@ -66,6 +77,8 @@ describe('renderClipPage', () => {
     );
 
     expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).not.toContain('value="clips/a"><img src=x>.md"');
+    expect(html).toContain('value="clips/a&quot;&gt;&lt;img src=x&gt;.md"');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(html).toContain('本文に&lt;b&gt;タグ&lt;/b&gt;が混じる');
     expect(html).toContain('src="https://img.example.com/a.png?a=1&amp;b=%222%22"');
@@ -129,6 +142,7 @@ describe('renderClipPage', () => {
     // 眺める面ではなく取りに来る面なので、サムネイルと抜粋は出さない。
     expect(html).not.toContain('<img');
     expect(html).not.toContain('片付けたほうの抜粋');
+    expect(html).not.toContain('class="dismiss-form"');
     // 見出しで分かれる以上、取り消し線と薄字は要らない。
     expect(html).not.toContain('dismissed');
   });

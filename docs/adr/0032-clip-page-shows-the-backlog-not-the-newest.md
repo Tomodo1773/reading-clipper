@@ -1,6 +1,6 @@
 # ADR 0032: 新着一覧をやめ、閲覧ページを在庫の面にする
 
-- ステータス: Accepted
+- ステータス: Accepted（読み取り専用の判断は[ADR 0033](0033-dismiss-clips-from-the-web-page.md)で更新）
 - 日付: 2026-08-31
 
 ## 背景

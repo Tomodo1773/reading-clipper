@@ -67,8 +67,11 @@ function createServer(env: McpEdgeEnv, audit: McpAuditContext): McpServer {
 /** 外部MCPクライアント向けのStreamable HTTP（ADR 0021）。 */
 const MCP_PATH = '/mcp';
 
-/** 自分がブラウザから開く読み取り専用のクリップ一覧（ADR 0030、ADR 0032）。 */
+/** 自分がブラウザから開くクリップ一覧（ADR 0030、ADR 0032、ADR 0033）。 */
 const CLIP_PAGE_PATH = '/clips';
+
+/** 一覧の未片付けカードから、1件だけ片付ける入口（ADR 0033）。 */
+const CLIP_DISMISS_PATH = '/clips/dismiss';
 
 /**
  * 閲覧ページの防御をエスケープ1枚に頼らない（ADR 0030）。
@@ -78,12 +81,15 @@ const CLIP_PAGE_PATH = '/clips';
  * おけばエスケープが漏れても実行に繋がらない。CSSは`<style>`で埋めているため`style-src`
  * だけはinlineを許す。
  */
-const CLIP_PAGE_CSP = "default-src 'none'; img-src https:; style-src 'unsafe-inline'";
+const CLIP_PAGE_CSP =
+  "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'";
 
 export default {
   async fetch(request: Request, env: McpEdgeEnv, ctx: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
-    if (pathname !== MCP_PATH && pathname !== CLIP_PAGE_PATH) {
+    const servesClipPage = pathname === CLIP_PAGE_PATH && request.method === 'GET';
+    const dismissesClip = pathname === CLIP_DISMISS_PATH && request.method === 'POST';
+    if (pathname !== MCP_PATH && !servesClipPage && !dismissesClip) {
       return new Response('Not found', { status: 404 });
     }
     // Originが無いリクエストは通る実装なので、ブラウザの通常の遷移もそのまま抜ける。
@@ -92,9 +98,14 @@ export default {
       hostHeaderValidationResponse(request, [env.MCP_HOSTNAME]) ??
       originValidationResponse(request, [env.MCP_HOSTNAME]);
     if (rejected) return rejected;
+    // 通常のページ遷移と違い、状態を変えるform POSTにはOriginが付く。
+    // 無いものを許すと、既存のOrigin検証を迂回して別サイトから送れる。
+    if (dismissesClip && !request.headers.get('origin')) {
+      return new Response('Forbidden', { status: 403 });
+    }
     const subject = await getAccessSubject(ctx.access, env);
     if (!subject) return new Response('Forbidden', { status: 403 });
-    if (pathname === CLIP_PAGE_PATH) {
+    if (servesClipPage) {
       return new Response(await env.CORE.clipPage({ source: 'web', subject }), {
         headers: {
           'content-type': 'text/html; charset=utf-8',
@@ -102,6 +113,33 @@ export default {
           'cache-control': 'private, no-store',
           'content-security-policy': CLIP_PAGE_CSP,
         },
+      });
+    }
+    if (dismissesClip) {
+      let form: FormData;
+      try {
+        form = await request.formData();
+      } catch {
+        return new Response('Bad request', { status: 400 });
+      }
+      const args = coreToolSchemas.set_clip_dismissed.safeParse({
+        path: form.get('path'),
+        dismissed: true,
+      });
+      if (!args.success) return new Response('Bad request', { status: 400 });
+
+      const result = await env.CORE.callTool(
+        { source: 'web', subject },
+        { name: 'set_clip_dismissed', args: args.data },
+      );
+      if ('updated' in result && result.updated) {
+        return new Response(null, {
+          status: 303,
+          headers: { location: CLIP_PAGE_PATH, 'cache-control': 'private, no-store' },
+        });
+      }
+      return new Response('Clip could not be dismissed', {
+        status: 'unknown_path' in result ? 404 : 500,
       });
     }
     return createMcpHandler(() => createServer(env, { source: 'mcp', subject }), {

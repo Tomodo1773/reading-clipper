@@ -92,8 +92,8 @@ function metaLine(clip: PageClip, repo: string): string {
  * 外へ取りに行くのは記事のサムネイルだけで、それが失敗しても枠が残るだけで済む。
  */
 const CLIP_PAGE_STYLE = `
-:root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --link:#0969da; }
-@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d; --link:#4493f8; } }
+:root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --link:#0969da; --button-hover:#f6f8fa; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d; --link:#4493f8; --button-hover:#21262d; } }
 * { box-sizing: border-box; }
 body { margin:0 auto; padding:24px 16px 64px; max-width:720px; background:var(--bg); color:var(--fg);
   font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; line-height:1.6; }
@@ -102,10 +102,16 @@ h2 { font-size:1rem; font-weight:600; color:var(--muted); margin:28px 0 4px; }
 .clips, .done { list-style:none; margin:0; padding:0; }
 .clip { display:flex; gap:12px; padding:16px 0; border-top:1px solid var(--line); }
 .clip img { width:120px; height:68px; flex:none; object-fit:cover; border-radius:6px; background:var(--line); }
-.text { min-width:0; }
+.text { min-width:0; flex:1; }
 .title { font-weight:600; margin:0; }
 .excerpt { font-size:.875rem; margin:4px 0 0; }
-.clip .meta { color:var(--muted); font-size:.8125rem; margin:6px 0 0; }
+.clip-footer { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; margin-top:6px; }
+.clip .meta { color:var(--muted); font-size:.8125rem; margin:0; }
+.dismiss-form { margin-left:auto; }
+.dismiss-button { min-height:32px; padding:4px 10px; border:1px solid var(--line); border-radius:6px;
+  background:transparent; color:var(--fg); font:inherit; font-size:.8125rem; line-height:1.2; cursor:pointer; }
+.dismiss-button:hover { background:var(--button-hover); }
+.dismiss-button:focus-visible { outline:2px solid var(--link); outline-offset:2px; }
 .done li { padding:8px 0; border-top:1px solid var(--line); }
 .done .meta { color:var(--muted); font-size:.8125rem; margin-left:8px; }
 a { color:var(--link); text-decoration:none; }
@@ -118,10 +124,15 @@ a:hover { text-decoration:underline; }
  */
 function pendingRow(clip: PageClip, repo: string): string {
   const image = sourceHref(clip.imageUrl);
+  const title = oneLine(clipTitle(clip));
   const body =
     `<div class="text"><p class="title">${titleLink(clip)}</p>` +
     (clip.excerpt ? `<p class="excerpt">${escapeHtml(clip.excerpt)}</p>` : '') +
-    `<p class="meta">${metaLine(clip, repo)}</p></div>`;
+    `<div class="clip-footer"><p class="meta">${metaLine(clip, repo)}</p>` +
+    `<form class="dismiss-form" method="post" action="/clips/dismiss">` +
+    `<input type="hidden" name="path" value="${escapeHtml(clip.path)}">` +
+    `<button class="dismiss-button" type="submit" aria-label="${escapeHtml(`「${title}」を片付ける`)}">片付ける</button>` +
+    `</form></div></div>`;
   // Referrerを送らない。記事のサムネイルは第三者のサーバーから読むので、
   // Accessの後ろにあるホスト名をそのまま渡さない。
   const thumbnail = image
@@ -145,7 +156,7 @@ function doneRow(clip: PageClip, repo: string): string {
  *
  * まだ片付けていないものを全件、その下に片付けたものを全件並べる。件数で切らない。
  * 件数は節の長さがそのまま答えなので、見出しへ入れて別に数えない。
- * 読むだけの面なので、片付けなどの操作は置かない。
+ * 未片付けのカードからは、単体で片付けられる（ADR 0033）。
  */
 export function renderClipPage(clips: PageClip[], options: ClipPageOptions): string {
   const pending = clips.filter((clip) => clip.dismissedAt === null);

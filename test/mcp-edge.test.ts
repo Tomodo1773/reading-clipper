@@ -7,7 +7,11 @@ const EMAIL = 'owner@example.com';
 const HOST = 'mcp.example.com';
 
 function edgeEnv(overrides: Partial<McpEdgeEnv> = {}) {
-  const callTool = vi.fn(async () => ({ found: [] }));
+  const callTool = vi.fn(async (_audit: unknown, call: { name?: string }) =>
+    call?.name === 'set_clip_dismissed'
+      ? { updated: true, path: 'clips/a.md', dismissed: true }
+      : { found: [] },
+  );
   const clipPage = vi.fn(async () => '<!doctype html>\n<html lang="ja"><body>Clips</body></html>');
   return {
     env: {
@@ -25,6 +29,19 @@ function edgeEnv(overrides: Partial<McpEdgeEnv> = {}) {
 /** 閲覧ページはブラウザからのGETで、Originヘッダを持たない。 */
 function pageRequest(path = '/clips', headers: HeadersInit = {}): Request {
   return new Request(`https://${HOST}${path}`, { headers: { host: HOST, ...headers } });
+}
+
+function dismissRequest(path = 'clips/a.md', headers: HeadersInit = {}): Request {
+  return new Request(`https://${HOST}/clips/dismiss`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      host: HOST,
+      origin: `https://${HOST}`,
+      ...headers,
+    },
+    body: new URLSearchParams({ path }),
+  });
 }
 
 function accessContext(
@@ -183,7 +200,7 @@ describe('MCP Edge clip page', () => {
     expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('content-security-policy')).toBe(
-      "default-src 'none'; img-src https:; style-src 'unsafe-inline'",
+      "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'",
     );
     expect(await response.text()).toContain('<html lang="ja">');
     expect(clipPage).toHaveBeenCalledWith({ source: 'web', subject: 'access-user-123' });
@@ -208,5 +225,33 @@ describe('MCP Edge clip page', () => {
 
     expect(response.status).not.toBe(200);
     expect(clipPage).not.toHaveBeenCalled();
+  });
+
+  it('dismisses one clip through the shared Core tool and returns to the page', async () => {
+    const { env, callTool } = edgeEnv();
+    const response = await mcpEdge.fetch(
+      dismissRequest('clips/片付ける.md'),
+      env,
+      executionContext(accessContext()),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('/clips');
+    expect(callTool).toHaveBeenCalledWith(
+      { source: 'web', subject: 'access-user-123' },
+      { name: 'set_clip_dismissed', args: { path: 'clips/片付ける.md', dismissed: true } },
+    );
+  });
+
+  it('does not accept a state-changing form without an Origin', async () => {
+    const { env, callTool } = edgeEnv();
+    const response = await mcpEdge.fetch(
+      dismissRequest('clips/a.md', { origin: '' }),
+      env,
+      executionContext(accessContext()),
+    );
+
+    expect(response.status).toBe(403);
+    expect(callTool).not.toHaveBeenCalled();
   });
 });
