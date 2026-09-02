@@ -1,6 +1,6 @@
 # ADR 0030: 新着一覧を、公開境界Workerの読み取り専用ページとしても出す
 
-- ステータス: Accepted（母集団とレイアウトは[ADR 0032](0032-clip-page-shows-the-backlog-not-the-newest.md)で更新。ここで保留した「見たいのは在庫のほうではないか」への答えがそれである。境界・認証・読み取り専用の判断は変えていない）
+- ステータス: Accepted（母集団とレイアウトは[ADR 0032](0032-clip-page-shows-the-backlog-not-the-newest.md)、読み取り専用の判断は[ADR 0033](0033-dismiss-clips-from-the-web-page.md)で更新）
 - 日付: 2026-08-31
 
 ## 背景
