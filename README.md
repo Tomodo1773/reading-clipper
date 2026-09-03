@@ -36,6 +36,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   認証付きのWebページに、まだ片付けていないクリップを**全件**、新しい順で並べる。サムネイルと冒頭の抜粋、ホスト、保存日を添え、タイトルから元の記事へ、「GitHub版」から保存済みMarkdownへ移動でき、その場で1件ずつ片付けられる（[ADR 0033](docs/adr/0033-dismiss-clips-from-the-web-page.md)）。件数で切らないので、古い在庫が一覧から落ちない（[ADR 0032](docs/adr/0032-clip-page-shows-the-backlog-not-the-newest.md)）。GitHubへログインできない環境からも眺められる（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
 - **保存した本文を、その場で読む**
   一覧の各行の「読む」から、保存済みのMarkdownをそのままページとして読める。英語の記事は保存の後で日本語へ置き換わっているため、**GitHubにログインできない環境でも訳文が読める**。本文はD1へ複製せず、開くたびにGitHubから読む（[ADR 0034](docs/adr/0034-read-the-saved-body-on-the-clip-page.md)）。
+- **閲覧ページをホーム画面から開く**
+  固有のfaviconとWeb App Manifestを持ち、スマートフォンのホーム画面へ追加したときもReading Clipperのアイコンで見分けられる。アイコンとmanifestも本文と同じAccessの後ろで配り、オフラインキャッシュは持たない（[ADR 0035](docs/adr/0035-icons-and-installable-clip-page.md)）。
 - **片付けたクリップは、その下に1行ずつ全件**
   読み終えた記事のURLを後から取りに来るための面。サムネイルと抜粋は出さず、題名・保存日・ホスト・「GitHub版」だけを1行で並べる。スクリプトを持たない1枚のページなので、全件があればブラウザの検索でそのまま引ける。記事のファイル名は日付で長くせずタイトルのまま保つ。
 - **保存済みクリップを本文から探して読み返す**
@@ -196,3 +198,4 @@ pnpm dry-run
 - [新着一覧をやめ、閲覧ページを在庫の面にする](docs/adr/0032-clip-page-shows-the-backlog-not-the-newest.md)
 - [閲覧ページのカードからクリップを片付ける](docs/adr/0033-dismiss-clips-from-the-web-page.md)
 - [保存した本文を、閲覧ページで読めるようにする](docs/adr/0034-read-the-saved-body-on-the-clip-page.md)
+- [閲覧ページへアイコンとWeb App Manifestを置く](docs/adr/0035-icons-and-installable-clip-page.md)
