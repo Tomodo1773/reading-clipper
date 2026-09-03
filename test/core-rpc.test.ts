@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CoreMcpEntrypoint } from '../src/core-rpc';
+import { CoreMcpEntrypoint, CoreWebEntrypoint } from '../src/core-rpc';
 import { recordClip, setClipDismissed } from '../src/clips';
 import { resetGitHubTokenCache } from '../src/github';
 import { utf8ToBase64 } from '../src/utils';
@@ -16,17 +16,6 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('Core MCP RPC', () => {
-  it('rejects an invalid audit context before executing a tool', async () => {
-    const env = makeEnv();
-    await expect(
-      CoreMcpEntrypoint.prototype.callTool.call(
-        { env } as unknown as CoreMcpEntrypoint,
-        { source: 'mcp', subject: '' },
-        { name: 'set_clip_dismissed', args: { path: 'clips/a.md', dismissed: true } },
-      ),
-    ).rejects.toThrow('invalid audit context');
-  });
-
   it('executes the shared Core tool contract from the Service Binding entrypoint', async () => {
     const env = makeEnv();
     await recordClip(env, {
@@ -39,7 +28,6 @@ describe('Core MCP RPC', () => {
 
     const result = await CoreMcpEntrypoint.prototype.callTool.call(
       { env } as unknown as CoreMcpEntrypoint,
-      { source: 'mcp', subject: 'subject' },
       { name: 'set_clip_dismissed', args: { path: 'clips/a.md', dismissed: true } },
     );
     expect(result).toEqual({ updated: true, path: 'clips/a.md', dismissed: true });
@@ -87,9 +75,8 @@ describe('Core MCP RPC', () => {
     });
     const env = makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem });
     const core = { env } as unknown as CoreMcpEntrypoint;
-    const audit = { source: 'mcp' as const, subject: 'subject' };
 
-    const found = await CoreMcpEntrypoint.prototype.callTool.call(core, audit, {
+    const found = await CoreMcpEntrypoint.prototype.callTool.call(core, {
       name: 'find_clips',
       args: { query: 'MCP設計' },
     });
@@ -97,7 +84,7 @@ describe('Core MCP RPC', () => {
     const clipRef = foundItems[0]?.clip_ref;
     expect(clipRef).toEqual(expect.any(String));
 
-    const read = await CoreMcpEntrypoint.prototype.callTool.call(core, audit, {
+    const read = await CoreMcpEntrypoint.prototype.callTool.call(core, {
       name: 'read_clip',
       args: { clip_ref: clipRef },
     });
@@ -108,17 +95,9 @@ describe('Core MCP RPC', () => {
       body: 'Service Bindingのrequestをまたいで読む。',
     });
   });
+});
 
-  it('rejects an invalid audit context before rendering the clip page', async () => {
-    const env = makeEnv();
-    await expect(
-      CoreMcpEntrypoint.prototype.clipPage.call({ env } as unknown as CoreMcpEntrypoint, {
-        source: 'web',
-        subject: '',
-      }),
-    ).rejects.toThrow('invalid audit context');
-  });
-
+describe('Core Web RPC', () => {
   it('renders the clip page from D1 without going through the tool contract', async () => {
     const env = makeEnv();
     await recordClip(env, {
@@ -139,9 +118,8 @@ describe('Core MCP RPC', () => {
     });
     await setClipDismissed(env, 'clips/読み終えた記事.md', true, '2026-08-25T00:00:00.000Z');
 
-    const html = await CoreMcpEntrypoint.prototype.clipPage.call(
-      { env } as unknown as CoreMcpEntrypoint,
-      { source: 'web', subject: 'access-user-123' },
+    const html = await CoreWebEntrypoint.prototype.clipPage.call(
+      { env } as unknown as CoreWebEntrypoint,
     );
 
     expect(html).toContain('<a href="https://example.com/edge">公開境界</a>');
@@ -152,11 +130,29 @@ describe('Core MCP RPC', () => {
     // 片付けた側は取りに来る面なので、抜粋を出さない。
     expect(html).not.toContain('片付けた側の抜粋');
   });
+
+  it('dismisses one clip through the window the web boundary is given', async () => {
+    const env = makeEnv();
+    await recordClip(env, {
+      path: 'clips/読まないと決めた.md',
+      url: 'https://example.com/skip',
+      title: '読まないと決めた',
+      excerpt: '',
+      clippedAt: '2026-09-02T00:00:00.000Z',
+    });
+    const core = { env } as unknown as CoreWebEntrypoint;
+
+    expect(await CoreWebEntrypoint.prototype.dismissClip.call(core, 'clips/読まないと決めた.md'))
+      .toEqual({ updated: true, path: 'clips/読まないと決めた.md', dismissed: true });
+    // 台帳に無いパスは、印の付けようがないことをそのまま返す。
+    expect(await CoreWebEntrypoint.prototype.dismissClip.call(core, 'clips/無い.md')).toEqual({
+      updated: false,
+      unknown_path: 'clips/無い.md',
+    });
+  });
 });
 
 describe('list_clips', () => {
-  const audit = { source: 'mcp' as const, subject: 'subject' };
-
   function mockTree(fileNames: string[], options: { fail?: boolean } = {}) {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input));
@@ -177,7 +173,7 @@ describe('list_clips', () => {
   }
 
   function call(core: CoreMcpEntrypoint, args: unknown) {
-    return CoreMcpEntrypoint.prototype.callTool.call(core, audit, { name: 'list_clips', args });
+    return CoreMcpEntrypoint.prototype.callTool.call(core, { name: 'list_clips', args });
   }
 
   it('lists every clip newest first, keeping the ones D1 never recorded', async () => {
@@ -272,10 +268,8 @@ describe('list_clips', () => {
 });
 
 describe('clip read page', () => {
-  const audit = { source: 'web' as const, subject: 'access-user-123' };
-
   function core() {
-    return { env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }) } as unknown as CoreMcpEntrypoint;
+    return { env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }) } as unknown as CoreWebEntrypoint;
   }
 
   it('renders the saved body as HTML, with the front matter dropped', async () => {
@@ -304,9 +298,8 @@ translated_at: "2026-09-01T00:00:00.000Z"
       throw new Error(`unexpected request: ${url}`);
     });
 
-    const html = await CoreMcpEntrypoint.prototype.clipReadPage.call(
+    const html = await CoreWebEntrypoint.prototype.clipReadPage.call(
       core(),
-      audit,
       'clips/Attention Is All You Need.md',
     );
 
@@ -327,7 +320,7 @@ translated_at: "2026-09-01T00:00:00.000Z"
     });
 
     expect(
-      await CoreMcpEntrypoint.prototype.clipReadPage.call(core(), audit, 'clips/消した記事.md'),
+      await CoreWebEntrypoint.prototype.clipReadPage.call(core(), 'clips/消した記事.md'),
     ).toBeUndefined();
   });
 
@@ -337,8 +330,7 @@ translated_at: "2026-09-01T00:00:00.000Z"
       throw new Error('GitHub must not be asked');
     });
     const entrypoint = core();
-    const read = (path: string) =>
-      CoreMcpEntrypoint.prototype.clipReadPage.call(entrypoint, audit, path);
+    const read = (path: string) => CoreWebEntrypoint.prototype.clipReadPage.call(entrypoint, path);
 
     expect(await read('.github/workflows/build.yml')).toBeUndefined();
     expect(await read('clips/../.github/workflows/build.yml')).toBeUndefined();

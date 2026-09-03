@@ -73,23 +73,40 @@ D1は厳密な既読・未読管理ではなく、GitHub上のクリップへ付
 
 ## システム構成
 
-上の構成図はBot/Core Workerの内部を示す。矢印は主要な連携を表し、完全なリクエスト・レスポンスの時系列ではない。MCP公開境界は下で別に説明する。
+上の構成図はBot/Core Workerの内部を示す。矢印は主要な連携を表し、完全なリクエスト・レスポンスの時系列ではない。公開境界は下で別に説明する。
 
-Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、公開MCP境界だけをMCP Edge Workerへ分離している。AI Gateway経由でGeminiを呼び、記事本文はGitHub、会話履歴とtool refはDurable Objects、ダイジェスト用の状態はD1へ保存する。
+Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、外から到達する入口だけを2つのWorkerへ分離している。AI Gateway経由でGeminiを呼び、記事本文はGitHub、会話履歴とtool refはDurable Objects、ダイジェスト用の状態はD1へ保存する。
 
 構成図の編集元とアイコンの出典は[`docs/architecture/`](docs/architecture/)にある。
 
 ### 公開境界
 
-現在のWorkerをBot/Coreとして残し、外部から到達する入口だけを持つMCP Edge Workerを同じrepositoryから別deployする。外部MCP clientはCloudflare Access Managed OAuthで保護したCustom Domainへ接続し、MCP EdgeからCoreへはDNSを通さずService Binding RPCで到達する。通常Botは公開MCPを経由せず、両方の入口が同じCore use caseを呼ぶ。
+外から到達する入口は、用途ごとに2つのWorkerへ分ける。どちらも同じrepositoryから別deployし、Bot/CoreへはDNSを通さずService Binding RPCで到達する。Coreの業務secretとstorage bindingは、どちらにも渡さない。
+
+| Worker | 設定 | 入口 | 認証 |
+| --- | --- | --- | --- |
+| MCP Edge | `wrangler.mcp.jsonc` | `/mcp` | Access Managed OAuth。`ctx.access`でaudienceと本人emailを照合する |
+| Web | `wrangler.web.jsonc` | `/clips`、`/clips/read`、`/clips/dismiss`、アイコン、manifest | hostnameのAccess policyだけ。アプリ内では照合しない |
+
+分けている理由は、Workers Static Assetsを持つWorkerには`ctx.access`が渡らないためである。アイコンとmanifestを配る面と、身元をアプリで読む面は同居できない（[ADR 0036](docs/adr/0036-split-the-clip-page-into-its-own-worker.md)）。
+
+#### MCP境界
+
+外部MCP clientはCloudflare Access Managed OAuthで保護したCustom Domainへ接続する。通常Botは公開MCPを経由せず、両方の入口が同じCore use caseを呼ぶ。
 
 `load_content` / `save_loaded`と`list_clips` / `find_clips` / `read_clip` / `delete_clip`の受け渡しは、owner単位のDurable Objectに置くopaque refを使う。通常BotとMCPで同じtool contractを共有し、会話履歴とrefは90日で削除する。MCP tool callは同期で処理し、既存QueueはSlackの3秒ACKと再試行のためだけに残す。詳細と判断理由は[ADR 0021](docs/adr/0021-publish-tools-through-mcp-edge.md)と[ADR 0022](docs/adr/0022-persist-tool-refs-in-durable-object.md)に記録している。
 
-MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、EdgeへCustom Domainを手動設定し、そのhostname全体をAccess applicationで保護してManaged OAuthを有効にする。EdgeはCloudflareが検証済みの`ctx.access`からaudienceと本人identityを確認する。必要な実環境値は`ACCESS_AUD`、`ACCESS_ALLOWED_EMAIL`、`MCP_HOSTNAME`で、Coreの業務secretは渡さない。`workers.dev`とpreview URLは無効化している。
+必要な実環境値は`ACCESS_AUD`（Access applicationのaudience tag）、`ACCESS_ALLOWED_EMAIL`（許可する本人のemail）、`MCP_HOSTNAME`（schemeを含まないCustom Domainのhostname）。このWorkerへは静的アセットを追加しない。
 
-このWorkerは`/mcp`のほかに、クリップの閲覧ページ`/clips`と、保存した本文を読む`/clips/read`を持つ。同じCustom Domain、同じAccess applicationの後ろに置き、認証は共通。EdgeはAccessで確認した本人であることだけを確かめてCoreへRPCを投げ、HTMLの組み立てはCore側で行う。Edgeにクリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。ページはブラウザから開くだけなのでManaged OAuthは経由しない。
+#### Web境界
 
-`ACCESS_AUD`にはAccess applicationのaudience tag、`ACCESS_ALLOWED_EMAIL`には許可する本人のemail、`MCP_HOSTNAME`にはschemeを含まないCustom Domainのhostnameを設定する。Custom Domain、Access application / policy / Managed OAuth、MCP Edge用のWorkers Builds接続は実環境で手動設定する。
+閲覧ページはブラウザから開くだけなのでManaged OAuthを経由せず、hostnameへ掛けたAccess applicationのpolicyが認証の正本になる。アプリ内でメールアドレスを再照合せず、設定値も持たない。Accessを通らない別名の入口を作らないことが唯一の錠なので、`workers.dev`とpreview URLは無効にしている（MCP Edgeも同じ）。
+
+WorkerはAccessの後ろでCoreへRPCを投げるだけで、HTMLの組み立てはCore側で行う。クリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。Coreが公開する窓口は一覧・本文・片付けの3つに限る。状態を変える片付けのPOSTだけ、リクエスト自身のオリジンと突き合わせて他サイトからのformを止める。アイコンとmanifestはWorkers Static Assetsが直接配る（[ADR 0035](docs/adr/0035-icons-and-installable-clip-page.md)）。
+
+#### 手動設定
+
+Coreを先にdeployし、その後で各WorkerへCustom Domainを設定する。Custom Domain、Access application / policy / Managed OAuth、Workers Buildsの接続は実環境で手動設定する。Access applicationは境界ごとに分け、policyは同じものを使う。
 
 ## 技術スタック
 
@@ -199,3 +216,4 @@ pnpm dry-run
 - [閲覧ページのカードからクリップを片付ける](docs/adr/0033-dismiss-clips-from-the-web-page.md)
 - [保存した本文を、閲覧ページで読めるようにする](docs/adr/0034-read-the-saved-body-on-the-clip-page.md)
 - [閲覧ページへアイコンとWeb App Manifestを置く](docs/adr/0035-icons-and-installable-clip-page.md)
+- [閲覧ページをMCP境界から切り離し、専用Workerへ置く](docs/adr/0036-split-the-clip-page-into-its-own-worker.md)

@@ -5,7 +5,7 @@ import { handleQueueMessage } from './processor';
 import { handleTranslateMessage, TRANSLATION_QUEUE } from './translate';
 import type { ChatJob, Env, TranslateJob } from './types';
 
-export { CoreMcpEntrypoint } from './core-rpc';
+export { CoreMcpEntrypoint, CoreWebEntrypoint } from './core-rpc';
 export { ToolState } from './tool-state';
 export { ThreadAgent } from './thread';
 

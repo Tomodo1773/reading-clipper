@@ -4,7 +4,7 @@ import {
   McpServer,
   originValidationResponse,
 } from '@modelcontextprotocol/server';
-import type { CoreMcpEntrypoint, McpAuditContext } from './core-rpc';
+import type { CoreMcpEntrypoint } from './core-rpc';
 import {
   coreToolDescriptions,
   coreToolNames,
@@ -20,26 +20,28 @@ export interface McpEdgeEnv {
 }
 
 /**
- * Accessを通った本人だけを認め、監査に渡せる安定IDを返す。
- * どの入口から来たかは呼び出し側が名乗る（ADR 0030）。
+ * Accessを通った本人だけを認める（ADR 0021）。
+ *
+ * `ctx.access`はCloudflareが検証済みのものなので、JWTの署名検証やJWKS取得はしない。
+ * このWorkerは静的アセットを持たない。持たせると`ctx.access`が渡らなくなり、この照合が
+ * 常に失敗する（ADR 0036）。
  */
-export async function getAccessSubject(
+export async function isAllowedIdentity(
   access: CloudflareAccessContext | undefined,
   env: McpEdgeEnv,
-): Promise<string | undefined> {
-  if (!access || !env.ACCESS_AUD || access.aud !== env.ACCESS_AUD) return undefined;
+): Promise<boolean> {
+  if (!access || !env.ACCESS_AUD || access.aud !== env.ACCESS_AUD) return false;
   try {
     const identity = await access.getIdentity();
     const email = identity?.email?.trim().toLowerCase();
     const allowedEmail = env.ACCESS_ALLOWED_EMAIL?.trim().toLowerCase();
-    if (!identity?.user_uuid || !allowedEmail || email !== allowedEmail) return undefined;
-    return identity.user_uuid;
+    return Boolean(allowedEmail) && email === allowedEmail;
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-function createServer(env: McpEdgeEnv, audit: McpAuditContext): McpServer {
+function createServer(env: McpEdgeEnv): McpServer {
   const server = new McpServer({ name: 'reading-clipper', version: '1.0.0' });
   const register = <K extends CoreToolName>(name: K) => {
     server.registerTool(
@@ -49,10 +51,7 @@ function createServer(env: McpEdgeEnv, audit: McpAuditContext): McpServer {
         inputSchema: coreToolSchemas[name].shape,
       },
       async (args: Record<string, unknown>) => {
-        const result = await env.CORE.callTool(audit, {
-          name,
-          args,
-        });
+        const result = await env.CORE.callTool({ name, args });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result) }],
           structuredContent: result,
@@ -64,103 +63,21 @@ function createServer(env: McpEdgeEnv, audit: McpAuditContext): McpServer {
   return server;
 }
 
-/** 外部MCPクライアント向けのStreamable HTTP（ADR 0021）。 */
+/** 外部MCPクライアント向けのStreamable HTTP（ADR 0021）。この境界はこれだけを持つ。 */
 const MCP_PATH = '/mcp';
-
-/** 自分がブラウザから開くクリップ一覧（ADR 0030、ADR 0032、ADR 0033）。 */
-const CLIP_PAGE_PATH = '/clips';
-
-/** 一覧の未片付けカードから、1件だけ片付ける入口（ADR 0033）。 */
-const CLIP_DISMISS_PATH = '/clips/dismiss';
-
-/** 保存した本文を読むページ（ADR 0034）。 */
-const CLIP_READ_PATH = '/clips/read';
-
-/**
- * 閲覧ページの防御をエスケープ1枚に頼らない（ADR 0030）。
- *
- * 抜粋は記事本文から作る外部由来の文字列で、エスケープを外すと注入になる。このページは
- * スクリプトを1行も持たず、外へ読みに行くのはサムネイルだけなので、`script-src`を落として
- * おけばエスケープが漏れても実行に繋がらない。CSSは`<style>`で埋めているため`style-src`
- * だけはinlineを許す。
- */
-const CLIP_PAGE_CSP =
-  "default-src 'none'; img-src https:; manifest-src 'self'; style-src 'unsafe-inline'; form-action 'self'";
-
-/** 閲覧の面は2枚とも同じ扱いで返す。 */
-function pageResponse(html: string): Response {
-  return new Response(html, {
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      // Accessの後ろにある個人的な一覧なので、共有キャッシュにも履歴にも残さない。
-      'cache-control': 'private, no-store',
-      'content-security-policy': CLIP_PAGE_CSP,
-    },
-  });
-}
 
 export default {
   async fetch(request: Request, env: McpEdgeEnv, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
-    const { pathname } = url;
-    const servesClipPage = pathname === CLIP_PAGE_PATH && request.method === 'GET';
-    const servesClipReadPage = pathname === CLIP_READ_PATH && request.method === 'GET';
-    const dismissesClip = pathname === CLIP_DISMISS_PATH && request.method === 'POST';
-    if (pathname !== MCP_PATH && !servesClipPage && !servesClipReadPage && !dismissesClip) {
+    if (new URL(request.url).pathname !== MCP_PATH) {
       return new Response('Not found', { status: 404 });
     }
-    // Originが無いリクエストは通る実装なので、ブラウザの通常の遷移もそのまま抜ける。
-    // 入口ごとに緩めない。
     const rejected =
       hostHeaderValidationResponse(request, [env.MCP_HOSTNAME]) ??
       originValidationResponse(request, [env.MCP_HOSTNAME]);
     if (rejected) return rejected;
-    // 通常のページ遷移と違い、状態を変えるform POSTにはOriginが付く。
-    // 無いものを許すと、既存のOrigin検証を迂回して別サイトから送れる。
-    if (dismissesClip && !request.headers.get('origin')) {
+    if (!(await isAllowedIdentity(ctx.access, env))) {
       return new Response('Forbidden', { status: 403 });
     }
-    const subject = await getAccessSubject(ctx.access, env);
-    if (!subject) return new Response('Forbidden', { status: 403 });
-    if (servesClipPage) {
-      return pageResponse(await env.CORE.clipPage({ source: 'web', subject }));
-    }
-    if (servesClipReadPage) {
-      const html = await env.CORE.clipReadPage(
-        { source: 'web', subject },
-        url.searchParams.get('path') ?? '',
-      );
-      return html ? pageResponse(html) : new Response('Not found', { status: 404 });
-    }
-    if (dismissesClip) {
-      let form: FormData;
-      try {
-        form = await request.formData();
-      } catch {
-        return new Response('Bad request', { status: 400 });
-      }
-      const args = coreToolSchemas.set_clip_dismissed.safeParse({
-        path: form.get('path'),
-        dismissed: true,
-      });
-      if (!args.success) return new Response('Bad request', { status: 400 });
-
-      const result = await env.CORE.callTool(
-        { source: 'web', subject },
-        { name: 'set_clip_dismissed', args: args.data },
-      );
-      if ('updated' in result && result.updated) {
-        return new Response(null, {
-          status: 303,
-          headers: { location: CLIP_PAGE_PATH, 'cache-control': 'private, no-store' },
-        });
-      }
-      return new Response('Clip could not be dismissed', {
-        status: 'unknown_path' in result ? 404 : 500,
-      });
-    }
-    return createMcpHandler(() => createServer(env, { source: 'mcp', subject }), {
-      legacy: 'stateless',
-    }).fetch(request);
+    return createMcpHandler(() => createServer(env), { legacy: 'stateless' }).fetch(request);
   },
 } satisfies ExportedHandler<McpEdgeEnv>;

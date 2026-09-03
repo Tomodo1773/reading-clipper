@@ -1,6 +1,6 @@
 # ADR 0034: 保存した本文を、閲覧ページで読めるようにする
 
-- ステータス: Accepted
+- ステータス: Accepted（提供元のWorkerは[ADR 0036](0036-split-the-clip-page-into-its-own-worker.md)で更新）
 - 日付: 2026-09-03
 
 ## 背景

@@ -44,6 +44,6 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      # CoreとMCP Edgeの構文・bindingsを、デプロイせずに検証する。
+      # Core、MCP Edge、Webの構文・bindingsを、デプロイせずに検証する。
       - name: Validate Worker configurations
         run: pnpm dry-run

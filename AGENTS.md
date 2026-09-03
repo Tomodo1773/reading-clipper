@@ -22,7 +22,7 @@
 | `src/chat.ts` | AI SDKでのモデル呼び出し1ターン |
 | `src/tool-contract.ts` | BotとMCP Edgeで共有するツール名・schema・説明 |
 | `src/tools.ts` | 共通ツール処理とAI SDK adapter（読む／保存する／一覧する／探す／消す） |
-| `src/core-rpc.ts` / `src/mcp-edge.ts` | Service Binding RPCと公開境界（`/mcp`と閲覧ページ`/clips`）。Edgeは認証と受け渡しだけを持ち、画面はCoreが組み立てます |
+| `src/core-rpc.ts` / `src/mcp-edge.ts` / `src/web.ts` | Service Binding RPCと2つの公開境界。MCPは`/mcp`だけ、Webは閲覧ページとアイコンを持ちます。境界は受け渡しだけで、画面はCoreが組み立てます（ADR 0036）。Web境界はAccess policyを認証の正本とし、アプリ内で本人を照合しません |
 | `src/tool-state.ts` / `src/retention.ts` | owner単位のopaque refと90日Alarm cleanup |
 | `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
 | `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / arXiv / Speaker Deck / ドクセル / Firecrawl）。サイト固有の変換ルールもここに置きます |
@@ -48,7 +48,7 @@ package managerはpnpmで、versionは `package.json` の `packageManager` で�
 | 依存の取得 | `sfw pnpm install` |
 | テスト | `sfw pnpm test` |
 | 型検査 | `sfw pnpm typecheck` |
-| Worker設定の検証 | `sfw pnpm dry-run`（Bot/CoreとMCP Edgeの両方） |
+| Worker設定の検証 | `sfw pnpm dry-run`（Bot/Core、MCP Edge、Webの3つ） |
 | ローカル起動 | `pnpm dev` |
 | AI Gatewayの作成・更新 | `sfw pnpm setup:aigw` |
 | D1スキーマの適用 | `pnpm wrangler d1 execute reading-clipper-clips-db --local --file=./schema.sql`（本番は `--remote`） |

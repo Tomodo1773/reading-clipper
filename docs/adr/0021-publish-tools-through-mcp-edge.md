@@ -1,6 +1,6 @@
 # ADR 0021: MCP公開境界を専用Workerへ分離し、Access Managed OAuthで保護する
 
-- ステータス: Accepted（実装済み）
+- ステータス: Accepted（実装済み。閲覧ページの分離と監査情報の受け渡しは[ADR 0036](0036-split-the-clip-page-into-its-own-worker.md)で更新）
 - 日付: 2026-08-24
 
 ## 背景

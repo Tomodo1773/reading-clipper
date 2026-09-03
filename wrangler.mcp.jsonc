@@ -6,10 +6,8 @@
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": true },
-  // faviconとPWA用画像。hostnameのAccess検証後、Workers Static Assetsが直接配る（ADR 0035）。
-  "assets": {
-    "directory": "./public"
-  },
+  // 静的アセットを持たせないこと。持たせるとCloudflareの内部ルーターが`ctx.access`を
+  // 渡さなくなり、Access identityの照合が常に失敗する（ADR 0036）。
   "services": [
     {
       "binding": "CORE",

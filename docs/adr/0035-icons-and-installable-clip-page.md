@@ -1,6 +1,6 @@
 # ADR 0035: 閲覧ページへアイコンとWeb App Manifestを置く
 
-- ステータス: Accepted
+- ステータス: Accepted（静的アセットの置き先は[ADR 0036](0036-split-the-clip-page-into-its-own-worker.md)で更新）
 - 日付: 2026-09-03
 
 ## 背景
