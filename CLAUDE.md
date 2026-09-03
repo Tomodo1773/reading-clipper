@@ -46,11 +46,11 @@ package managerはpnpmで、versionは `package.json` の `packageManager` で�
 | 目的 | コマンド |
 |---|---|
 | 依存の取得 | `sfw pnpm install` |
-| テスト | `pnpm test` |
-| 型検査 | `pnpm typecheck` |
-| Worker設定の検証 | `pnpm dry-run`（Bot/CoreとMCP Edgeの両方） |
+| テスト | `sfw pnpm test` |
+| 型検査 | `sfw pnpm typecheck` |
+| Worker設定の検証 | `sfw pnpm dry-run`（Bot/CoreとMCP Edgeの両方） |
 | ローカル起動 | `pnpm dev` |
-| AI Gatewayの作成・更新 | `pnpm setup:aigw` |
+| AI Gatewayの作成・更新 | `sfw pnpm setup:aigw` |
 | D1スキーマの適用 | `pnpm wrangler d1 execute reading-clipper-clips-db --local --file=./schema.sql`（本番は `--remote`） |
 | D1のバックフィル | 手順は [`scripts/backfill-clips.ts`](scripts/backfill-clips.ts) の冒頭コメント。GitHubからD1を作り直します |
 
