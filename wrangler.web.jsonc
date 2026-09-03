@@ -3,8 +3,9 @@
   "name": "reading-clipper-web",
   "main": "src/web.ts",
   "compatibility_date": "2026-08-01",
-  // Accessを掛けたCustom Domain以外の入口を作らない。このWorkerはアプリ内で本人を
-  // 照合しないので（ADR 0036）、別名の公開hostnameが1つでも残ると一覧が丸ごと読める。
+  // AccessはWorker自身へ付けるのでpreviewやworkers.devにも効くが、使わない公開名を
+  // 増やす理由がないため無効にしておく（ADR 0036）。Accessの設定はダッシュボードか
+  // Workers APIで行い、ここには書けない。
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": true },

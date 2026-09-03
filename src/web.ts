@@ -3,10 +3,9 @@ import type { CoreWebEntrypoint } from './core-rpc';
 /**
  * 閲覧ページの公開境界（ADR 0036）。
  *
- * 認証はhostnameへ掛けたCloudflare Access applicationのpolicyが正本で、ここでは本人を
- * 照合しない。このWorkerは静的アセットを持つため`ctx.access`が渡らず、照合しようにも
- * 身元を読めない。Accessを通らない別名の入口を作らないことが、そのまま唯一の錠になる
- * （`wrangler.web.jsonc`で`workers.dev`とpreview URLを無効にしている）。
+ * 認証はCloudflare Access policyが正本で、ここでは本人を照合しない。このWorkerは静的
+ * アセットを持つため`ctx.access`が渡らず、照合しようにも身元を読めない。Accessは
+ * hostnameではなくWorker自身へ付けてあり、ドメインを足しても外れない。
  */
 export interface WebEnv {
   CORE: Service<CoreWebEntrypoint>;

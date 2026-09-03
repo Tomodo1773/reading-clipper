@@ -86,7 +86,7 @@ Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、外か
 | Worker | 設定 | 入口 | 認証 |
 | --- | --- | --- | --- |
 | MCP Edge | `wrangler.mcp.jsonc` | `/mcp` | Access Managed OAuth。`ctx.access`でaudienceと本人emailを照合する |
-| Web | `wrangler.web.jsonc` | `/clips`、`/clips/read`、`/clips/dismiss`、アイコン、manifest | hostnameのAccess policyだけ。アプリ内では照合しない |
+| Web | `wrangler.web.jsonc` | `/clips`、`/clips/read`、`/clips/dismiss`、アイコン、manifest | Worker自身へ付けたAccess policyだけ。アプリ内では照合しない |
 
 分けている理由は、Workers Static Assetsを持つWorkerには`ctx.access`が渡らないためである。アイコンとmanifestを配る面と、身元をアプリで読む面は同居できない（[ADR 0036](docs/adr/0036-split-the-clip-page-into-its-own-worker.md)）。
 
@@ -100,13 +100,15 @@ Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、外か
 
 #### Web境界
 
-閲覧ページはブラウザから開くだけなのでManaged OAuthを経由せず、hostnameへ掛けたAccess applicationのpolicyが認証の正本になる。アプリ内でメールアドレスを再照合せず、設定値も持たない。Accessを通らない別名の入口を作らないことが唯一の錠なので、`workers.dev`とpreview URLは無効にしている（MCP Edgeも同じ）。
+閲覧ページはブラウザから開くだけなのでManaged OAuthを経由せず、Access policyが認証の正本になる。アプリ内でメールアドレスを再照合せず、設定値も持たない。
+
+Accessのapplicationはhostnameではなく**Worker自身**へ付ける。Custom Domain、route、`workers.dev`、previewのすべてに効き、後からドメインを足しても外れない。設定はダッシュボードかWorkers APIで行い、`wrangler.web.jsonc`には書けない。`workers.dev`とpreview URLは、使わない公開名を増やさないため無効のままにしている（MCP Edgeも同じ）。
 
 WorkerはAccessの後ろでCoreへRPCを投げるだけで、HTMLの組み立てはCore側で行う。クリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。Coreが公開する窓口は一覧・本文・片付けの3つに限る。状態を変える片付けのPOSTだけ、リクエスト自身のオリジンと突き合わせて他サイトからのformを止める。アイコンとmanifestはWorkers Static Assetsが直接配る（[ADR 0035](docs/adr/0035-icons-and-installable-clip-page.md)）。
 
 #### 手動設定
 
-Coreを先にdeployし、その後で各WorkerへCustom Domainを設定する。Custom Domain、Access application / policy / Managed OAuth、Workers Buildsの接続は実環境で手動設定する。Access applicationは境界ごとに分け、policyは同じものを使う。
+Coreを先にdeployし、境界のWorkerはAccessを付けてからCustom Domainを設定する。Custom Domain、Access application / policy / Managed OAuth、Workers Buildsの接続は実環境で手動設定する。Access applicationは境界ごとに分け、policyは同じものを使う。
 
 ## 技術スタック
 

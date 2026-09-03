@@ -24,7 +24,7 @@
 | Worker | 入口 | 認証 |
 | --- | --- | --- |
 | **MCP Worker** | `/mcp`だけ | `ctx.access`でaudienceと本人emailを照合（ADR 0021のまま） |
-| **Web Worker**（新規） | `/clips`、`/clips/read`、`/clips/dismiss`、アイコン、manifest | hostnameのAccess policyだけ |
+| **Web Worker**（新規） | `/clips`、`/clips/read`、`/clips/dismiss`、アイコン、manifest | Worker自身へ付けたAccess policyだけ |
 
 Static AssetsはWeb Workerが持つ。MCP Workerには**持たせない。** 持たせた時点で上の照合が常に失敗する。
 
@@ -34,9 +34,17 @@ Access applicationは分け、policyは既存のものを使い回す。applicat
 
 Access policyが認証の正本である。アプリ内でメールアドレスを再照合しない。**身元を読めない以上、これは選択ではなく帰結である。**
 
-代わりに、**Accessを通らない別名の入口を作らないことが唯一の錠になる。** `workers.dev`とpreview URLを無効にする。ここを外すと、Accessの掛かっていないhostnameから一覧が丸ごと読める。
-
 アプリ内のHost検証は置かない。到達できるhostnameはAccessを掛けたCustom Domainだけになり、しかも**静的アセットはWorkerを起動せずに配られる**ため、アプリ内の判定はアイコンとmanifestには最初から効かない。同じ扉を守っていない2枚目の錠を置いても、守れるものが増えない。
+
+### 錠はhostnameではなくWorker自身へ付ける
+
+Accessのapplicationを、hostnameではなく**Worker自身**へ付ける。ポリシーはCustom Domain、route、`workers.dev`、previewのすべてに効き、後からドメインを足しても外れない（[Cloudflare Access for Workers](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)）。policyはMCP境界と同じものを選ぶ。
+
+hostnameのapplicationだけで守ると、錠が**「Custom Domainを作ってからAccessを掛けるまで」の順序に依存する。** Worker側へ付ければ、Custom Domainが存在しない時点から保護されている。アプリ内に歯止めを持たない以上、この順序をうっかり間違えられる形にしない。
+
+`workers.dev`とpreview URLは、それでも無効のままにする。錠が外れなくなった今も、使わない公開名を増やす理由がない。
+
+設定はダッシュボードかWorkers APIで行う。`wrangler.web.jsonc`には書けない（wranglerの`access`ブロックは`wrangler dev`でidentityを模擬するためだけのもの）。その模擬も置かない。**このWorkerは`ctx.access`を読まないので、模擬する身元が無い。**
 
 ### 状態を変えるPOSTだけ、Originで止める
 
@@ -60,12 +68,13 @@ ADR 0021の「監査用の`source`と`user_uuid`をRPC引数として渡す」�
 - **アセットをbinding経由でWorkerから返す**: `ctx.access`は戻る。ADR 0035が既に退けた形で、hostnameのAccessで保護済みの静的ファイルにWorker呼び出しと境界コードを足すことになる。
 - **1つのAccess applicationに2つのhostnameを載せる**: 手作業が減る。セッション長がMCPクライアントと共通のまま残るので採らない。
 - **Web WorkerにもHost検証を置く**: 一見で堅い。守る扉が無く、アセットには効かない。
+- **hostnameのAccess applicationだけで守る**: MCP境界と同じ形になる。錠がデプロイ手順の順序に依存し、ドメインを足すたびに掛け直しが要る。
 - **監査情報を残す**: 「将来使うかもしれない」。使っていないものを、使っていない形のまま運ぶことになる。必要になったときは、記録する先を決めるところから始める。
 
 ## 影響
 
 - Workerが3つになり、Custom Domain、Access application、Workers BuildsのGit接続が1式増える。**ADR 0030が3つ目のWorkerを避けた理由がこの手作業そのもので、その判断を覆す。** アセットを配る面と、身元を読む面が同居できない以上、畳んだままにはできない。
 - deploy順はCoreが先、MCPとWebが後。この依存は変わらない。
-- Web側の錠はAccess applicationの設定1枚だけになる。設定を外す、あるいはpolicyを緩めると、アプリ側には二重の歯止めが無い。
+- Web側にはアプリ内の歯止めが無い。policyを緩めれば、そのまま一覧が開く。Worker自身へ付けているので、ドメインやrouteの付け外しでは外れない。
 - `MCP_HOSTNAME`という名前が実態と合うようになる（ADR 0030で「ズレる」と書いた影響が解消する）。
 - MCP境界のテストから閲覧ページの検証が消え、Web境界のテストへ移る。
