@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reading-clipper-web",
+  "main": "src/web.ts",
+  "compatibility_date": "2026-08-01",
+  // AccessはWorker自身へ付けるのでpreviewやworkers.devにも効くが、使わない公開名を
+  // 増やす理由がないため無効にしておく（ADR 0036）。Accessの設定はダッシュボードか
+  // Workers APIで行い、ここには書けない。
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  // faviconとPWA用画像。hostnameのAccess検証後、Workers Static Assetsが直接配る（ADR 0035）。
+  // Workerを起動せずに配るため、アプリ側の判定はこれらに掛からない。
+  "assets": {
+    "directory": "./public"
+  },
+  // 一覧・本文・片付けの3つだけを持つCore側の窓口（ADR 0036）。
+  "services": [
+    {
+      "binding": "CORE",
+      "service": "reading-clipper",
+      "entrypoint": "CoreWebEntrypoint"
+    }
+  ]
+  // Custom DomainとAccess application / policyは実環境固有なのでrepositoryへ書かず、
+  // deploy後に手動設定する（ADR 0021、ADR 0036）。
+}

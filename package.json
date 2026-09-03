@@ -8,9 +8,10 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:mcp": "wrangler deploy -c wrangler.mcp.jsonc",
+    "deploy:web": "wrangler deploy -c wrangler.web.jsonc",
     "cf-typegen": "wrangler types",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p src/tsconfig.json && tsc --noEmit -p test/tsconfig.json",
-    "dry-run": "wrangler deploy --dry-run && wrangler deploy --dry-run -c wrangler.mcp.jsonc",
+    "dry-run": "wrangler deploy --dry-run && wrangler deploy --dry-run -c wrangler.mcp.jsonc && wrangler deploy --dry-run -c wrangler.web.jsonc",
     "test": "vitest run",
     "setup:aigw": "node --experimental-strip-types scripts/setup-ai-gateway.ts"
   },
