@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Reading Clipper</title>
+  <rect width="1024" height="1024" fill="#11243a"/>
+  <g transform="translate(51.2 51.2) scale(.9)">
+    <path
+      d="M382 397c-37-65-23-145 35-188 67-50 163-33 209 37 28 43 32 95 10 139"
+      fill="none"
+      stroke="#ff6b4a"
+      stroke-linecap="round"
+      stroke-width="84"
+    />
+    <path
+      d="M322 315h328l115 115v329c0 30-24 54-54 54H322c-30 0-54-24-54-54V369c0-30 24-54 54-54Z"
+      fill="#fff7e8"
+    />
+    <path d="M650 335v76c0 17 14 31 31 31h76Z" fill="#11243a"/>
+    <path
+      d="m493 716-113-204c-28-51-10-112 40-140 50-27 111-9 139 41l125 226c49 89 17 201-72 250-74 41-166 25-222-38"
+      fill="none"
+      stroke="#ff6b4a"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="84"
+    />
+  </g>
+</svg>

@@ -204,7 +204,7 @@ describe('MCP Edge clip page', () => {
     expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('content-security-policy')).toBe(
-      "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'",
+      "default-src 'none'; img-src https:; manifest-src 'self'; style-src 'unsafe-inline'; form-action 'self'",
     );
     expect(await response.text()).toContain('<html lang="ja">');
     expect(clipPage).toHaveBeenCalledWith({ source: 'web', subject: 'access-user-123' });

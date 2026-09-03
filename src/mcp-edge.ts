@@ -85,7 +85,7 @@ const CLIP_READ_PATH = '/clips/read';
  * だけはinlineを許す。
  */
 const CLIP_PAGE_CSP =
-  "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'";
+  "default-src 'none'; img-src https:; manifest-src 'self'; style-src 'unsafe-inline'; form-action 'self'";
 
 /** 閲覧の面は2枚とも同じ扱いで返す。 */
 function pageResponse(html: string): Response {

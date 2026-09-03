@@ -45,6 +45,21 @@ describe('renderClipPage', () => {
     expect(html).toContain('zenn.dev · 8/19');
   });
 
+  it('announces the favicon and installable app metadata', () => {
+    const html = renderClipPage([], page);
+
+    expect(html).toContain('<meta name="theme-color" content="#11243a">');
+    expect(html).toContain(
+      '<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">',
+    );
+    expect(html).toContain(
+      '<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" sizes="180x180">',
+    );
+    expect(html).toContain(
+      '<link rel="manifest" href="/assets/manifest.webmanifest" crossorigin="use-credentials">',
+    );
+  });
+
   it('puts a compact dismiss form only on an undismissed card', () => {
     const html = renderClipPage([entry()], page);
 
@@ -166,7 +181,7 @@ describe('renderClipPage', () => {
     const html = renderClipPage([], page);
 
     expect(html).toContain('まだクリップはない。');
-    expect(html).not.toContain('<li');
+    expect(html).not.toMatch(/<li(?:\s|>)/u);
     expect(html).not.toContain('<h2>');
   });
 });
