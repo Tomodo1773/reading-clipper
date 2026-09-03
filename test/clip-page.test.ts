@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderClipPage } from '../src/clip-page';
+import { renderClipPage, renderClipReadPage } from '../src/clip-page';
 import type { PageClip } from '../src/clips';
 
 const entry = (overrides: Partial<PageClip> = {}): PageClip => ({
@@ -168,5 +168,45 @@ describe('renderClipPage', () => {
     expect(html).toContain('まだクリップはない。');
     expect(html).not.toContain('<li');
     expect(html).not.toContain('<h2>');
+  });
+});
+
+describe('renderClipReadPage', () => {
+  it('renders the saved body as HTML, so it can be read without opening GitHub', () => {
+    const html = renderClipReadPage({
+      title: 'Worker 設計',
+      markdown: `## 見出し
+
+本文の段落。
+
+- 箇条書き
+
+[リンク](https://example.com/a)`,
+    });
+
+    expect(html).toContain('<h1>Worker 設計</h1>');
+    expect(html).toContain('<h2>見出し</h2>');
+    expect(html).toContain('<p>本文の段落。</p>');
+    expect(html).toContain('<li>箇条書き</li>');
+    expect(html).toContain('<a href="https://example.com/a">リンク</a>');
+    // 一覧へ戻る導線と、本文の画像がリファラを漏らさないこと。
+    expect(html).toContain('<a href="/clips">← Clips</a>');
+    expect(html).toContain('<meta name="referrer" content="no-referrer">');
+  });
+
+  // CSPはスクリプトを止めるが、`style-src`のinlineは許している。本文に残った生HTMLを
+  // そのまま描画すると、このページの見た目を書き換えられる。
+  it('shows raw HTML left in the body as text instead of rendering it', () => {
+    const html = renderClipReadPage({
+      title: '<script>alert(1)</script>',
+      markdown: `<style>body{display:none}</style>
+
+本文に<b>タグ</b>が混じる`,
+    });
+
+    expect(html).not.toContain('<style>body{display:none}</style>');
+    expect(html).toContain('&lt;style&gt;body{display:none}&lt;/style&gt;');
+    expect(html).toContain('本文に&lt;b&gt;タグ&lt;/b&gt;が混じる');
+    expect(html).not.toContain('<script>alert(1)</script>');
   });
 });

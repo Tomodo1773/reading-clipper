@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { buildClipPage } from './clip-page';
+import { buildClipPage, buildClipReadPage } from './clip-page';
 import type { CoreToolName } from './tool-contract';
 import {
   deleteClipTool,
@@ -78,5 +78,15 @@ export class CoreMcpEntrypoint extends WorkerEntrypoint<Env> {
   async clipPage(audit: McpAuditContext): Promise<string> {
     requireAudit(audit);
     return buildClipPage(this.env);
+  }
+
+  /**
+   * 保存した本文を読むページのHTML（ADR 0034）。無いクリップでは`undefined`を返す。
+   *
+   * 一覧と同じく、ツール契約には載せない。
+   */
+  async clipReadPage(audit: McpAuditContext, path: string): Promise<string | undefined> {
+    requireAudit(audit);
+    return buildClipReadPage(this.env, path);
   }
 }

@@ -73,6 +73,9 @@ const CLIP_PAGE_PATH = '/clips';
 /** 一覧の未片付けカードから、1件だけ片付ける入口（ADR 0033）。 */
 const CLIP_DISMISS_PATH = '/clips/dismiss';
 
+/** 保存した本文を読むページ（ADR 0034）。 */
+const CLIP_READ_PATH = '/clips/read';
+
 /**
  * 閲覧ページの防御をエスケープ1枚に頼らない（ADR 0030）。
  *
@@ -84,12 +87,26 @@ const CLIP_DISMISS_PATH = '/clips/dismiss';
 const CLIP_PAGE_CSP =
   "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'";
 
+/** 閲覧の面は2枚とも同じ扱いで返す。 */
+function pageResponse(html: string): Response {
+  return new Response(html, {
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      // Accessの後ろにある個人的な一覧なので、共有キャッシュにも履歴にも残さない。
+      'cache-control': 'private, no-store',
+      'content-security-policy': CLIP_PAGE_CSP,
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: McpEdgeEnv, ctx: ExecutionContext): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
     const servesClipPage = pathname === CLIP_PAGE_PATH && request.method === 'GET';
+    const servesClipReadPage = pathname === CLIP_READ_PATH && request.method === 'GET';
     const dismissesClip = pathname === CLIP_DISMISS_PATH && request.method === 'POST';
-    if (pathname !== MCP_PATH && !servesClipPage && !dismissesClip) {
+    if (pathname !== MCP_PATH && !servesClipPage && !servesClipReadPage && !dismissesClip) {
       return new Response('Not found', { status: 404 });
     }
     // Originが無いリクエストは通る実装なので、ブラウザの通常の遷移もそのまま抜ける。
@@ -106,14 +123,14 @@ export default {
     const subject = await getAccessSubject(ctx.access, env);
     if (!subject) return new Response('Forbidden', { status: 403 });
     if (servesClipPage) {
-      return new Response(await env.CORE.clipPage({ source: 'web', subject }), {
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          // Accessの後ろにある個人的な一覧なので、共有キャッシュにも履歴にも残さない。
-          'cache-control': 'private, no-store',
-          'content-security-policy': CLIP_PAGE_CSP,
-        },
-      });
+      return pageResponse(await env.CORE.clipPage({ source: 'web', subject }));
+    }
+    if (servesClipReadPage) {
+      const html = await env.CORE.clipReadPage(
+        { source: 'web', subject },
+        url.searchParams.get('path') ?? '',
+      );
+      return html ? pageResponse(html) : new Response('Not found', { status: 404 });
     }
     if (dismissesClip) {
       let form: FormData;

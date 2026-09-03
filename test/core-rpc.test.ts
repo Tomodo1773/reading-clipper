@@ -270,3 +270,79 @@ describe('list_clips', () => {
     expect(result).not.toHaveProperty('matched');
   });
 });
+
+describe('clip read page', () => {
+  const audit = { source: 'web' as const, subject: 'access-user-123' };
+
+  function core() {
+    return { env: makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem }) } as unknown as CoreMcpEntrypoint;
+  }
+
+  it('renders the saved body as HTML, with the front matter dropped', async () => {
+    const markdown = `---
+source_url: "https://example.com/en"
+title: "Attention Is All You Need"
+translated_at: "2026-09-01T00:00:00.000Z"
+---
+
+## 概要
+
+日本語へ置き換えた本文。`;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/app/installations/')) {
+        return jsonResponse({ token: 'token', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      if (url.includes('/contents/')) {
+        return jsonResponse({
+          sha: 'sha',
+          html_url: 'https://github.com/example/clips/blob/main/a.md',
+          encoding: 'base64',
+          content: utf8ToBase64(markdown),
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    const html = await CoreMcpEntrypoint.prototype.clipReadPage.call(
+      core(),
+      audit,
+      'clips/Attention Is All You Need.md',
+    );
+
+    expect(html).toContain('<h1>Attention Is All You Need</h1>');
+    expect(html).toContain('<h2>概要</h2>');
+    expect(html).toContain('<p>日本語へ置き換えた本文。</p>');
+    // フロントマターは読む面に出さない。
+    expect(html).not.toContain('source_url');
+  });
+
+  it('returns nothing for a clip GitHub does not have', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/app/installations/')) {
+        return jsonResponse({ token: 'token', expires_at: '2099-01-01T00:00:00Z' });
+      }
+      return jsonResponse({ message: 'Not Found' }, 404);
+    });
+
+    expect(
+      await CoreMcpEntrypoint.prototype.clipReadPage.call(core(), audit, 'clips/消した記事.md'),
+    ).toBeUndefined();
+  });
+
+  // パスは外から来る。保存先の外を指すものは、GitHubへ問い合わせる前に落とす。
+  it('refuses a path that points outside the clips directory, without asking GitHub', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      throw new Error('GitHub must not be asked');
+    });
+    const entrypoint = core();
+    const read = (path: string) =>
+      CoreMcpEntrypoint.prototype.clipReadPage.call(entrypoint, audit, path);
+
+    expect(await read('.github/workflows/build.yml')).toBeUndefined();
+    expect(await read('clips/../.github/workflows/build.yml')).toBeUndefined();
+    expect(await read('')).toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

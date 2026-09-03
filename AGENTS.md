@@ -32,7 +32,7 @@
 | `src/front-matter.ts` | 保存済みMarkdownのフロントマターをWorkerとバックフィルで共通して読む |
 | `src/markdown.ts` | 保存するMarkdownの組み立て |
 | `src/translate.ts` | 保存後の翻訳。訳すかどうかの判定、本文の分割、GitHubへの書き戻し。Slackへは何も返しません |
-| `src/clip-page.ts` | 閲覧ページの母集団の読み出しとHTMLの組み立て。まだ片付けていないものと片付けたものを、件数で切らずに2段で出します |
+| `src/clip-page.ts` | 閲覧ページの2枚（一覧と本文）のHTMLの組み立て。一覧はD1から2段で、本文はGitHubから都度読んでMarkdownをHTMLにします |
 | `src/clips.ts` | D1へのアクセス。読書状態の注釈レイヤーです |
 | `src/digest.ts` | 週次ダイジェストの組み立て |
 | `src/dismiss.ts` | 片付けのボタンと、押されたあとのSlackメッセージの組み直し。D1へ印を書くのは`src/clips.ts`です |

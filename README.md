@@ -34,6 +34,8 @@ Reading Clipperは、アプリやブラウザの共有メニューからSlackへ
   AIが本文を読んだ時点で日本語以外だと分かった記事は、保存の直後に翻訳を積み、本文を訳文へ置き換える。クリップの返信を待たせないよう非同期で走るため、ファイルが日本語になるのは保存の数分後になる。原文は同じパスの1つ前のコミットに残り、題名とファイル名は原題のまま変えない（[ADR 0027](docs/adr/0027-translate-clips-into-japanese-after-saving.md)）。
 - **まだ片付けていないクリップを、ブラウザで全件見る**
   認証付きのWebページに、まだ片付けていないクリップを**全件**、新しい順で並べる。サムネイルと冒頭の抜粋、ホスト、保存日を添え、タイトルから元の記事へ、「GitHub版」から保存済みMarkdownへ移動でき、その場で1件ずつ片付けられる（[ADR 0033](docs/adr/0033-dismiss-clips-from-the-web-page.md)）。件数で切らないので、古い在庫が一覧から落ちない（[ADR 0032](docs/adr/0032-clip-page-shows-the-backlog-not-the-newest.md)）。GitHubへログインできない環境からも眺められる（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。
+- **保存した本文を、その場で読む**
+  一覧の各行の「読む」から、保存済みのMarkdownをそのままページとして読める。英語の記事は保存の後で日本語へ置き換わっているため、**GitHubにログインできない環境でも訳文が読める**。本文はD1へ複製せず、開くたびにGitHubから読む（[ADR 0034](docs/adr/0034-read-the-saved-body-on-the-clip-page.md)）。
 - **片付けたクリップは、その下に1行ずつ全件**
   読み終えた記事のURLを後から取りに来るための面。サムネイルと抜粋は出さず、題名・保存日・ホスト・「GitHub版」だけを1行で並べる。スクリプトを持たない1枚のページなので、全件があればブラウザの検索でそのまま引ける。記事のファイル名は日付で長くせずタイトルのまま保つ。
 - **保存済みクリップを本文から探して読み返す**
@@ -83,7 +85,7 @@ Slack受付、Queue処理、週次cronはBot/Core Workerへ同居させ、公開
 
 MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、EdgeへCustom Domainを手動設定し、そのhostname全体をAccess applicationで保護してManaged OAuthを有効にする。EdgeはCloudflareが検証済みの`ctx.access`からaudienceと本人identityを確認する。必要な実環境値は`ACCESS_AUD`、`ACCESS_ALLOWED_EMAIL`、`MCP_HOSTNAME`で、Coreの業務secretは渡さない。`workers.dev`とpreview URLは無効化している。
 
-このWorkerは`/mcp`のほかに、クリップの閲覧ページ`/clips`を持つ。同じCustom Domain、同じAccess applicationの後ろに置き、認証は共通。EdgeはAccessで確認した本人であることだけを確かめてCoreへRPCを投げ、HTMLの組み立てはCore側で行う。Edgeにクリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。ページはブラウザから開くだけなのでManaged OAuthは経由しない。
+このWorkerは`/mcp`のほかに、クリップの閲覧ページ`/clips`と、保存した本文を読む`/clips/read`を持つ。同じCustom Domain、同じAccess applicationの後ろに置き、認証は共通。EdgeはAccessで確認した本人であることだけを確かめてCoreへRPCを投げ、HTMLの組み立てはCore側で行う。Edgeにクリップのデータもsecretも持たせない（[ADR 0030](docs/adr/0030-read-only-clip-page-on-the-public-boundary.md)）。ページはブラウザから開くだけなのでManaged OAuthは経由しない。
 
 `ACCESS_AUD`にはAccess applicationのaudience tag、`ACCESS_ALLOWED_EMAIL`には許可する本人のemail、`MCP_HOSTNAME`にはschemeを含まないCustom Domainのhostnameを設定する。Custom Domain、Access application / policy / Managed OAuth、MCP Edge用のWorkers Builds接続は実環境で手動設定する。
 
@@ -98,6 +100,7 @@ MCP Edgeは`wrangler.mcp.jsonc`で管理する。Coreを先にdeployした後、
 | 会話・tool状態 | Cloudflare Durable Objects | Slackスレッド単位の会話履歴、owner単位のopaque ref、90日Alarm cleanup |
 | ダイジェスト状態 | Cloudflare D1 / Cron Triggers | 片付け状態、再掲履歴、週次実行 |
 | AI | Vercel AI SDK / Gemini / Cloudflare AI Gateway | 要約、質問応答、保存対象の判断、保存後の翻訳 |
+| 表示 | marked | 保存したMarkdownを閲覧ページのHTMLへ |
 | 本文取得 | Qiita Markdown / Zenn API / X API / arXiv LaTeXML HTML / Speaker Deck・ドクセルの構造化データ / Firecrawl | URLごとの本文取得 |
 | 保存 | GitHub App / Contents API | privateリポジトリへのMarkdown保存 |
 | テスト | Vitest / Cloudflare Workers test pool | Worker環境でのユニットテスト |
@@ -165,6 +168,7 @@ pnpm dry-run
 - 週次ダイジェストは「読んだか」ではなく「片付けたか」だけを管理。
 - 保存先はprivate GitHubリポジトリを前提とし、取得した本文を外部へ再配布しない。閲覧ページもCloudflare Accessで本人だけに限定し、公開しない。
 - 閲覧ページの操作は、未片付けカードを1件ずつ片付けることだけ。件数で切らないため、保存が増えるとページも伸びる。
+- 本文を読むページは、開くたびにGitHubから取る。GitHubが応答しなければ読めない。
 - `clips/README.md`は自動生成しない。GitHub上のクリップ一覧は名前順のファイル一覧だけで、新着や片付けの状態は閲覧ページで見る。
 - 削除は既定ブランチの先頭からファイルを消すだけで、本文はGitの履歴に残る。取り消しは`git revert`で行う。
 - 翻訳は保存済みの本文を訳文で置き換える形で行い、原文はGitの履歴にだけ残る。訳し漏れたクリップは元の言語のまま残り、訳し直す導線は「同じURLをもう一度送る」だけ。
@@ -191,3 +195,4 @@ pnpm dry-run
 - [題名での在否確認は、二次索引ではなくファイル一覧で行う](docs/adr/0031-list-clips-from-the-file-tree.md)
 - [新着一覧をやめ、閲覧ページを在庫の面にする](docs/adr/0032-clip-page-shows-the-backlog-not-the-newest.md)
 - [閲覧ページのカードからクリップを片付ける](docs/adr/0033-dismiss-clips-from-the-web-page.md)
+- [保存した本文を、閲覧ページで読めるようにする](docs/adr/0034-read-the-saved-body-on-the-clip-page.md)

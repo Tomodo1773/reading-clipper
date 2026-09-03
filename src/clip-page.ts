@@ -1,4 +1,7 @@
+import { Marked } from 'marked';
 import { clipTitle, type PageClip, selectAllClips } from './clips';
+import { parseClipFrontMatter } from './front-matter';
+import { getGitHubTextFile } from './github';
 import type { Env } from './types';
 
 /** 見出しと`<title>`。 */
@@ -65,6 +68,11 @@ function savedCopyUrl(repo: string, path: string): string {
   return `https://github.com/${repo}/blob/HEAD/${encodedPath}`;
 }
 
+/** 保存した本文を読むページ（ADR 0034）。同じ境界の中なので相対パスで足りる。 */
+function readHref(path: string): string {
+  return `/clips/read?path=${encodeURIComponent(path)}`;
+}
+
 /**
  * 題名。URLが無い、または不正な古いデータはリンクにしない（ADR 0017）。
  * 台帳に題名を持たない行はパスから導く（ADR 0011）。
@@ -77,13 +85,16 @@ function titleLink(clip: PageClip): string {
 
 /**
  * 題名の脇に出す素性。2つの節が同じ画面に並ぶので、並びも項目も揃える。
- * 保存済みMarkdownへのリンクだけはHTMLとして組むので、エスケープを通さない。
+ * リンクだけはHTMLとして組むので、エスケープを通さない。
  */
 function metaLine(clip: PageClip, repo: string): string {
   return [clipHost(clip.url), clippedDay(clip.clippedAt)]
     .filter(Boolean)
     .map(escapeHtml)
-    .concat(`<a href="${escapeHtml(savedCopyUrl(repo, clip.path))}">GitHub版</a>`)
+    .concat(
+      `<a href="${escapeHtml(readHref(clip.path))}">読む</a>`,
+      `<a href="${escapeHtml(savedCopyUrl(repo, clip.path))}">GitHub版</a>`,
+    )
     .join(' · ');
 }
 
@@ -114,6 +125,9 @@ h2 { font-size:1rem; font-weight:600; color:var(--muted); margin:28px 0 4px; }
 .dismiss-button:focus-visible { outline:2px solid var(--link); outline-offset:2px; }
 .done li { padding:8px 0; border-top:1px solid var(--line); }
 .done .meta { color:var(--muted); font-size:.8125rem; margin-left:8px; }
+/* 記事の画像・コード・表は、このページの幅を知らないまま入ってくる。 */
+.body img { max-width:100%; height:auto; }
+.body pre, .body table { display:block; overflow-x:auto; }
 a { color:var(--link); text-decoration:none; }
 a:hover { text-decoration:underline; }
 @media (max-width:480px) { .clip img { width:88px; height:50px; } }
@@ -152,6 +166,21 @@ function doneRow(clip: PageClip, repo: string): string {
 }
 
 /**
+ * 2つの面で共通の枠。`head`にはそのページだけの行を渡す。
+ */
+function renderPage(title: string, head: string, body: string): string {
+  return (
+    '<!doctype html>\n<html lang="ja">\n<head>\n<meta charset="utf-8">\n' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+    // Accessの後ろにあるのでクローラーは辿り着かない。公開範囲を変えたときのために置く。
+    '<meta name="robots" content="noindex">\n' +
+    head +
+    `<title>${escapeHtml(title)}</title>\n<style>${CLIP_PAGE_STYLE}</style>\n</head>\n<body>\n` +
+    `${body}\n</body>\n</html>\n`
+  );
+}
+
+/**
  * 閲覧ページ全体（ADR 0030、ADR 0032）。
  *
  * まだ片付けていないものを全件、その下に片付けたものを全件並べる。件数で切らない。
@@ -181,18 +210,48 @@ export function renderClipPage(clips: PageClip[], options: ClipPageOptions): str
     }
   }
 
-  return (
-    '<!doctype html>\n<html lang="ja">\n<head>\n<meta charset="utf-8">\n' +
-    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
-    // Accessの後ろにあるのでクローラーは辿り着かない。公開範囲を変えたときのために置く。
-    '<meta name="robots" content="noindex">\n' +
-    `<title>${CLIP_PAGE_TITLE}</title>\n<style>${CLIP_PAGE_STYLE}</style>\n</head>\n<body>\n` +
-    `<h1>${CLIP_PAGE_TITLE}</h1>\n` +
-    `${sections.join('\n')}\n</body>\n</html>\n`
-  );
+  return renderPage(CLIP_PAGE_TITLE, '', `<h1>${CLIP_PAGE_TITLE}</h1>\n${sections.join('\n')}`);
 }
 
 /** 閲覧ページのHTMLを組み立てる（ADR 0030）。読むのはD1の1クエリだけ。 */
 export async function buildClipPage(env: Env): Promise<string> {
   return renderClipPage(await selectAllClips(env), { repo: env.GITHUB_REPO });
+}
+
+/**
+ * 本文のMarkdownをHTMLにする（ADR 0034）。
+ *
+ * 生HTMLは描画せず、文字として出す。CSPはスクリプトを止めるが`style-src`のinlineは
+ * 許しているので、本文に残った`<style>`や`style`属性はこのページの見た目を書き換えられる。
+ */
+const bodyMarkdown = new Marked({ renderer: { html: ({ text }) => escapeHtml(text) } });
+
+/** 保存した本文を読む1枚（ADR 0034）。出すのは題名と本文だけ。 */
+export function renderClipReadPage(clip: { title: string; markdown: string }): string {
+  const title = oneLine(clip.title);
+  return renderPage(
+    title,
+    // 本文の画像も第三者のサーバーから読む。一覧のサムネイルは属性で止めているが、
+    // 本文の画像には付けられないのでページ単位で止める。
+    '<meta name="referrer" content="no-referrer">\n',
+    `<p><a href="/clips">← Clips</a></p>\n<h1>${escapeHtml(title)}</h1>\n` +
+      `<article class="body">${bodyMarkdown.parse(clip.markdown, { async: false })}</article>`,
+  );
+}
+
+/**
+ * 読むページのHTMLを組み立てる（ADR 0034）。無いクリップでは`undefined`を返す。
+ *
+ * パスは外から来る。`clips/`の外を指すものはGitHubへ問い合わせる前に落とす。
+ */
+export async function buildClipReadPage(env: Env, path: string): Promise<string | undefined> {
+  if (!path.startsWith('clips/') || path.includes('..')) return undefined;
+  const file = await getGitHubTextFile(env, path);
+  if (!file) return undefined;
+  const { fields, body } = parseClipFrontMatter(file.content);
+  // 題名はフロントマターにある。持たない古いファイルはパスから導く（ADR 0011）。
+  return renderClipReadPage({
+    title: clipTitle({ path, title: fields.title ?? null }),
+    markdown: body,
+  });
 }
