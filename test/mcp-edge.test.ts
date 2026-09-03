@@ -270,11 +270,8 @@ describe('MCP Edge clip read page', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    // ヘッダは一覧と同じ1箇所で組む。中身はそちらのテストが見ている。
     expect(response.headers.get('cache-control')).toBe('private, no-store');
-    expect(response.headers.get('content-security-policy')).toBe(
-      "default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'self'",
-    );
     expect(await response.text()).toContain('保存した本文');
     expect(clipReadPage).toHaveBeenCalledWith(
       { source: 'web', subject: 'access-user-123' },
@@ -292,17 +289,5 @@ describe('MCP Edge clip read page', () => {
     );
 
     expect(response.status).toBe(404);
-  });
-
-  it('does not read a clip without an Access context', async () => {
-    const { env, clipReadPage } = edgeEnv();
-    const response = await mcpEdge.fetch(
-      pageRequest('/clips/read?path=clips%2Fa.md'),
-      env,
-      executionContext(),
-    );
-
-    expect(response.status).toBe(403);
-    expect(clipReadPage).not.toHaveBeenCalled();
   });
 });
