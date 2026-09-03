@@ -19,6 +19,7 @@
     "@ai-sdk/provider": "^4.0.7",
     "@modelcontextprotocol/server": "2.0.0",
     "ai": "^7.0.73",
+    "marked": "18.0.11",
     "slack-edge": "^1.3.17",
     "zod": "^4.4.3"
   },

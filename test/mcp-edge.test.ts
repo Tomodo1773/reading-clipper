@@ -13,9 +13,12 @@ function edgeEnv(overrides: Partial<McpEdgeEnv> = {}) {
       : { found: [] },
   );
   const clipPage = vi.fn(async () => '<!doctype html>\n<html lang="ja"><body>Clips</body></html>');
+  const clipReadPage = vi.fn(async (_audit: unknown, path: string) =>
+    path === 'clips/a.md' ? '<html lang="ja"><body>保存した本文</body></html>' : undefined,
+  );
   return {
     env: {
-      CORE: { callTool, clipPage } as unknown as McpEdgeEnv['CORE'],
+      CORE: { callTool, clipPage, clipReadPage } as unknown as McpEdgeEnv['CORE'],
       ACCESS_AUD: AUD,
       ACCESS_ALLOWED_EMAIL: EMAIL,
       MCP_HOSTNAME: HOST,
@@ -23,6 +26,7 @@ function edgeEnv(overrides: Partial<McpEdgeEnv> = {}) {
     },
     callTool,
     clipPage,
+    clipReadPage,
   };
 }
 
@@ -253,5 +257,37 @@ describe('MCP Edge clip page', () => {
 
     expect(response.status).toBe(403);
     expect(callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe('MCP Edge clip read page', () => {
+  it('serves the body Core renders for one clip', async () => {
+    const { env, clipReadPage, callTool } = edgeEnv();
+    const response = await mcpEdge.fetch(
+      pageRequest('/clips/read?path=clips%2Fa.md'),
+      env,
+      executionContext(accessContext()),
+    );
+
+    expect(response.status).toBe(200);
+    // ヘッダは一覧と同じ1箇所で組む。中身はそちらのテストが見ている。
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(await response.text()).toContain('保存した本文');
+    expect(clipReadPage).toHaveBeenCalledWith(
+      { source: 'web', subject: 'access-user-123' },
+      'clips/a.md',
+    );
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when Core has no such clip', async () => {
+    const { env } = edgeEnv();
+    const response = await mcpEdge.fetch(
+      pageRequest('/clips/read?path=clips%2F消した記事.md'),
+      env,
+      executionContext(accessContext()),
+    );
+
+    expect(response.status).toBe(404);
   });
 });
