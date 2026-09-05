@@ -8,6 +8,11 @@
   // minimumReleaseAge により wrangler は7日以上前のものが入るため、上限は今日より前になる。
   "compatibility_date": "2026-08-01",
 
+  // workers.devの自動ホスト名とプレビューURLを無効にする。
+  // Custom Domain以外の公開名を増やさないため（Accessの掛け忘れが起きる面を減らす）。
+  "workers_dev": false,
+  "preview_urls": false,
+
   // Bot/Core Worker。Slack受付、Queue consumer、cron、AIとtool実処理を持つ（ADR 0021）。
   "observability": {
     "enabled": true
