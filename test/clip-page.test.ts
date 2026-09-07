@@ -47,11 +47,11 @@ describe('renderClipPage', () => {
     expect(html).toContain('zenn.dev · 8/19');
   });
 
-  it('opens the article body in another tab so the list stays put', () => {
+  it('keeps the saved body in the same tab so an installed app stays put', () => {
     const html = renderClipPage([entry()], page);
 
     expect(html).toContain(
-      '<a href="/clips/read?path=clips%2FWorker%20%E8%A8%AD%E8%A8%88.md" target="_blank" rel="noreferrer">読む</a>',
+      '<a href="/clips/read?path=clips%2FWorker%20%E8%A8%AD%E8%A8%88.md">読む</a>',
     );
   });
 

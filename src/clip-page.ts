@@ -74,8 +74,9 @@ function readHref(path: string): string {
 }
 
 /**
- * 一覧から出ていくリンク。読みに行っても一覧が残るように別タブで開く。
+ * 外部サイトへ出ていくリンク。読みに行っても一覧が残るように別タブで開く。
  * `noreferrer`でAccessの後ろにあるホスト名を渡さない（サムネイルと同じ扱い）。
+ * 自前のページは同じタブで開く。標準表示のPWAから外へ出さないため。
  */
 function outboundLink(href: string, label: string): string {
   return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${label}</a>`;
@@ -100,7 +101,7 @@ function metaLine(clip: PageClip, repo: string): string {
     .filter(Boolean)
     .map(escapeHtml)
     .concat(
-      outboundLink(readHref(clip.path), '読む'),
+      `<a href="${escapeHtml(readHref(clip.path))}">読む</a>`,
       outboundLink(savedCopyUrl(repo, clip.path), 'GitHub版'),
     )
     .join(' · ');
