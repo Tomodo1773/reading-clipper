@@ -122,11 +122,15 @@ describe('Core Web RPC', () => {
       { env } as unknown as CoreWebEntrypoint,
     );
 
-    expect(html).toContain('<a href="https://example.com/edge">公開境界</a>');
+    expect(html).toContain(
+      '<a href="https://example.com/edge" target="_blank" rel="noreferrer">公開境界</a>',
+    );
     expect(html).toContain('Edgeは認証と受け渡しだけを持つ。');
     expect(html).toContain('まだ片付けていない（1件）');
     expect(html).toContain('片付けたもの（1件）');
-    expect(html).toContain('<a href="https://example.com/done">読み終えた記事</a>');
+    expect(html).toContain(
+      '<a href="https://example.com/done" target="_blank" rel="noreferrer">読み終えた記事</a>',
+    );
     // 片付けた側は取りに来る面なので、抜粋を出さない。
     expect(html).not.toContain('片付けた側の抜粋');
   });
