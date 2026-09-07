@@ -38,11 +38,21 @@ describe('renderClipPage', () => {
   it('links the title to the article and the saved copy to GitHub', () => {
     const html = renderClipPage([entry()], page);
 
-    expect(html).toContain('<a href="https://zenn.dev/alice/articles/worker">Worker [設計]</a>');
     expect(html).toContain(
-      '<a href="https://github.com/example/clips/blob/HEAD/clips/Worker%20%E8%A8%AD%E8%A8%88.md">GitHub版</a>',
+      '<a href="https://zenn.dev/alice/articles/worker" target="_blank" rel="noreferrer">Worker [設計]</a>',
+    );
+    expect(html).toContain(
+      '<a href="https://github.com/example/clips/blob/HEAD/clips/Worker%20%E8%A8%AD%E8%A8%88.md" target="_blank" rel="noreferrer">GitHub版</a>',
     );
     expect(html).toContain('zenn.dev · 8/19');
+  });
+
+  it('keeps the saved body in the same tab so an installed app stays put', () => {
+    const html = renderClipPage([entry()], page);
+
+    expect(html).toContain(
+      '<a href="/clips/read?path=clips%2FWorker%20%E8%A8%AD%E8%A8%88.md">読む</a>',
+    );
   });
 
   it('announces the favicon and installable app metadata', () => {
@@ -153,7 +163,9 @@ describe('renderClipPage', () => {
     );
 
     expect(html).toContain('<h2>片付けたもの（1件）</h2>');
-    expect(html).toContain('<a href="https://zenn.dev/alice/articles/worker">Worker [設計]</a>');
+    expect(html).toContain(
+      '<a href="https://zenn.dev/alice/articles/worker" target="_blank" rel="noreferrer">Worker [設計]</a>',
+    );
     // 眺める面ではなく取りに来る面なので、サムネイルと抜粋は出さない。
     expect(html).not.toContain('<img');
     expect(html).not.toContain('片付けたほうの抜粋');

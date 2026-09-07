@@ -74,13 +74,22 @@ function readHref(path: string): string {
 }
 
 /**
+ * 外部サイトへ出ていくリンク。読みに行っても一覧が残るように別タブで開く。
+ * `noreferrer`でAccessの後ろにあるホスト名を渡さない（サムネイルと同じ扱い）。
+ * 自前のページは同じタブで開く。標準表示のPWAから外へ出さないため。
+ */
+function outboundLink(href: string, label: string): string {
+  return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${label}</a>`;
+}
+
+/**
  * 題名。URLが無い、または不正な古いデータはリンクにしない（ADR 0017）。
  * 台帳に題名を持たない行はパスから導く（ADR 0011）。
  */
 function titleLink(clip: PageClip): string {
   const label = escapeHtml(oneLine(clipTitle(clip)));
   const href = sourceHref(clip.url);
-  return href ? `<a href="${escapeHtml(href)}">${label}</a>` : label;
+  return href ? outboundLink(href, label) : label;
 }
 
 /**
@@ -93,7 +102,7 @@ function metaLine(clip: PageClip, repo: string): string {
     .map(escapeHtml)
     .concat(
       `<a href="${escapeHtml(readHref(clip.path))}">読む</a>`,
-      `<a href="${escapeHtml(savedCopyUrl(repo, clip.path))}">GitHub版</a>`,
+      outboundLink(savedCopyUrl(repo, clip.path), 'GitHub版'),
     )
     .join(' · ');
 }
