@@ -181,7 +181,7 @@ function renderPage(title: string, head: string, body: string): string {
   return (
     '<!doctype html>\n<html lang="ja">\n<head>\n<meta charset="utf-8">\n' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
-    '<meta name="theme-color" content="#11243a">\n' +
+    '<meta name="theme-color" content="#dceee7">\n' +
     '<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">\n' +
     '<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png" sizes="180x180">\n' +
     '<link rel="manifest" href="/assets/manifest.webmanifest" crossorigin="use-credentials">\n' +

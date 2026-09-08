@@ -58,7 +58,7 @@ describe('renderClipPage', () => {
   it('announces the favicon and installable app metadata', () => {
     const html = renderClipPage([], page);
 
-    expect(html).toContain('<meta name="theme-color" content="#11243a">');
+    expect(html).toContain('<meta name="theme-color" content="#dceee7">');
     expect(html).toContain(
       '<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">',
     );

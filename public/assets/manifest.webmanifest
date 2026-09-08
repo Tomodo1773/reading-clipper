@@ -7,8 +7,8 @@
   "start_url": "/clips",
   "scope": "/clips",
   "display": "standalone",
-  "background_color": "#11243a",
-  "theme_color": "#11243a",
+  "background_color": "#dceee7",
+  "theme_color": "#dceee7",
   "icons": [
     {
       "src": "/assets/icons/icon-192.png",
