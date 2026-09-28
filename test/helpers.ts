@@ -10,7 +10,7 @@ let toolOwnerId = 'test-owner-0';
 
 /**
  * D1のテーブルを用意して空にする。
- * vitest-pool-workersはテストごとにストレージを巻き戻すので、beforeEachで呼ぶ。
+ * Cloudflare Vitest pluginはテストごとにストレージを巻き戻すので、beforeEachで呼ぶ。
  */
 export async function resetClips(): Promise<void> {
   toolOwnerId = `test-owner-${++toolOwnerSequence}`;
