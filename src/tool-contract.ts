@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+/**
+ * `list_clips`が1回に返す件数の上限で、省略時の件数でもある（ADR 0031、ADR 0037）。
+ * モデルへ渡すschemaと説明文がこの値を名指すので、契約としてここに1つだけ置く。
+ */
+export const LIST_CLIPS_LIMIT = 100;
+
 /** BotとMCP Edgeが共有する、transport非依存のtool contract。 */
 export const coreToolSchemas = {
   load_content: z.object({ url: z.string().url().describe('読み込む記事のHTTP(S) URL。') }),
@@ -28,6 +34,17 @@ export const coreToolSchemas = {
       .max(120)
       .optional()
       .describe('題名に含まれる語。空白区切りで全部を含むものに絞る。省略すると全件が対象。'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(LIST_CLIPS_LIMIT)
+      .optional()
+      .describe(`新しい順で返す件数。省略すると${LIST_CLIPS_LIMIT}。`),
+    dismissed: z
+      .boolean()
+      .optional()
+      .describe('falseなら片付けていないものだけ、trueなら片付けたものだけ。省略すると両方。'),
   }),
   read_clip: z.object({
     clip_ref: z.string().min(1).describe('find_clipsまたはlist_clipsが返したopaqueなclip_ref。'),
@@ -38,12 +55,6 @@ export const coreToolSchemas = {
 } as const;
 
 export type CoreToolName = keyof typeof coreToolSchemas;
-
-/**
- * `list_clips`が項目を返す上限（ADR 0031）。ガードではなく機能上限で、有限の寿命を持つ。
- * モデルへ渡す説明文がこの値を名指すので、契約としてここに1つだけ置く。
- */
-export const LIST_CLIPS_LIMIT = 100;
 
 export const coreToolNames = [
   'load_content',
@@ -65,7 +76,7 @@ export const coreToolDescriptions: Record<CoreToolName, string> = {
   find_clips:
     '保存済みクリップを本文から最大5件探し、読取・削除に使うopaqueなclip_refを返す。GitHubのコード検索索引に依存するため、0件は保存されていないことの根拠にならない。題名で在否を確かめるときはlist_clipsを使う。',
   list_clips:
-    `保存済みクリップをGitHubのファイル一覧から直接引く。検索索引を経由しないので、matchedが返っていれば全件を走査した結果である。title_queryを省略すると全件が対象。matchedが0なら、その題名のクリップは保存されていない。該当が${LIST_CLIPS_LIMIT}件を超えるときは項目を返さずtoo_manyを返すので、語を足して絞る。長い題名はファイル名が255バイトで切り詰められるため、末尾の語では引けないことがある。本文は見ないのでsnippetとgithub_urlは返さない。`,
+    `保存済みクリップをGitHubのファイル一覧から直接引き、保存日時の新しい順で返す。検索索引を経由しないので、matchedが返っていれば全件を走査した結果である。matchedはtitle_queryとdismissedで絞った該当数で、foundにはそのうち新しい順の上位limit件が入る。foundがmatchedより少なければ続きがあるので、語を足すかlimitを上げる。matchedが0なら、その条件のクリップは保存されていない。長い題名はファイル名が255バイトで切り詰められるため、末尾の語では引けないことがある。本文は見ないのでsnippetとgithub_urlは返さない。`,
   read_clip:
     'find_clipsまたはlist_clipsが返したclip_refの現在の本文をGitHubから読む。検索snippetだけを本文の根拠にしない。保存時の素性も返す。fetch_completeがfalseなら本文は取り切れていないので、そのつもりで扱う。',
   delete_clip:

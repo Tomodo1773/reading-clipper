@@ -1,6 +1,6 @@
 # ADR 0031: 題名での在否確認は、二次索引ではなくファイル一覧で行う
 
-- ステータス: Accepted
+- ステータス: Accepted（該当が多いときの返し方は[ADR 0037](0037-list-clips-returns-the-newest-slice.md)で更新）
 - 日付: 2026-08-31
 
 ## 背景

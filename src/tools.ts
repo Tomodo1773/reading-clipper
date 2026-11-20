@@ -5,6 +5,7 @@ import {
   deleteClip,
   type FoundClip,
   recordClip,
+  selectAllClips,
   selectClipsByPath,
   setClipDismissed,
 } from './clips';
@@ -219,31 +220,47 @@ export async function findClipsTool(env: Env, ownerId: string, rawArgs: unknown)
 }
 
 /**
- * 題名での在否確認（ADR 0031）。母集団はGitHubのファイル一覧で、二次索引を経由しない。
+ * 題名での在否確認と、新しい順の一覧（ADR 0031、ADR 0037）。
+ * 母集団はGitHubのファイル一覧で、二次索引を経由しない。
  *
  * 成功時にだけ`matched`を返すのが契約の本体である。`matched`があることが全件を
  * 走査した証拠になり、`matched === 0`は「保存されていない」という事実として使える。
  * 失敗時は`matched`を返さないので、0件と見に行けなかったことが形として別物になる。
  */
 export async function listClipsTool(env: Env, ownerId: string, rawArgs: unknown) {
-  const { title_query: titleQuery } = coreToolSchemas.list_clips.parse(rawArgs);
+  const {
+    title_query: titleQuery,
+    limit = LIST_CLIPS_LIMIT,
+    dismissed,
+  } = coreToolSchemas.list_clips.parse(rawArgs);
   let paths: string[];
   try {
     paths = await listGitHubClipFiles(env);
   } catch (error) {
     return { found: [], failed_at: logFailure(error, 'github', 'list_clips') };
   }
+  const titled = paths.filter((path) => clipNameMatches(path, titleQuery ?? ''));
 
-  const matched = paths.filter((path) => clipNameMatches(path, titleQuery ?? ''));
-  // 任意の一部を返すと、それが全部だと誤らせる。切らずに件数だけを返す（ADR 0031）。
-  if (matched.length > LIST_CLIPS_LIMIT) {
-    return { found: [], matched: matched.length, too_many: true };
+  // 該当が100件を超えうるので、パスを`IN`へ並べず台帳を1回で読む（ADR 0037）。
+  let annotations: Map<string, FoundClip>;
+  try {
+    annotations = new Map((await selectAllClips(env)).map((clip) => [clip.path, clip]));
+  } catch (error) {
+    // 台帳なしでは片付け状態も新しさも分からない。絞り込みや上位N件を名乗れないときは
+    // 失敗にし、全件をそのまま返せるときだけ注釈なしで返す（ADR 0037）。
+    const failedAt = logFailure(error, 'clips', 'list_clips_annotations');
+    if (dismissed !== undefined || titled.length > limit) return { found: [], failed_at: failedAt };
+    annotations = new Map();
   }
 
-  const annotations = await annotateClips(env, 'list_clips', matched);
-  const candidates = matched
+  // 片付けの印は台帳の行にしか付かないので、行が無いクリップは片付けていない側に入る。
+  const matched = titled
     .map((path) => ({ path, annotation: annotations.get(path) }))
-    .sort(byRecency);
+    .filter(
+      ({ annotation }) =>
+        dismissed === undefined || Boolean(annotation?.dismissedAt) === dismissed,
+    );
+  const candidates = matched.sort(byRecency).slice(0, limit);
   return { found: await toFoundClips(env, ownerId, candidates), matched: matched.length };
 }
 
