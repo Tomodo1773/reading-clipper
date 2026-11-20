@@ -1,24 +1,30 @@
 import { z } from 'zod';
 
+/**
+ * `list_clips`が1回に返す件数の上限で、省略時の件数でもある（ADR 0031、ADR 0037）。
+ * モデルへ渡すschemaが上限と既定値の両方にこの値を使うので、契約としてここに1つだけ置く。
+ */
+export const LIST_CLIPS_LIMIT = 100;
+
 /** BotとMCP Edgeが共有する、transport非依存のtool contract。 */
 export const coreToolSchemas = {
   load_content: z.object({ url: z.string().url().describe('読み込む記事のHTTP(S) URL。') }),
   save_loaded: z.object({
-    loaded_ref: z.string().min(1).describe('load_contentが返したopaqueなloaded_ref。'),
+    loaded_ref: z.string().min(1).describe('load_contentが返したloaded_ref。'),
     body_language: z
       .string()
       .trim()
       .min(2)
       .max(40)
       .optional()
-      .describe('保存する本文の言語（BCP 47の言語コード。日本語ならja、英語ならen）。'),
+      .describe('本文の言語コード（日本語ならja、英語ならen）。'),
   }),
   set_clip_dismissed: z.object({
-    path: z.string().startsWith('clips/').describe('clips/ から始まるクリップのパス。'),
+    path: z.string().startsWith('clips/').describe('list_clipsまたはfind_clipsが返したpath。'),
     dismissed: z.boolean().describe('片付けるならtrue、印を外すならfalse。'),
   }),
   find_clips: z.object({
-    query: z.string().trim().min(1).max(120).describe('題名・URL・本文に含まれる検索語。'),
+    query: z.string().trim().min(1).max(120).describe('検索語。'),
   }),
   list_clips: z.object({
     title_query: z
@@ -27,23 +33,28 @@ export const coreToolSchemas = {
       .min(1)
       .max(120)
       .optional()
-      .describe('題名に含まれる語。空白区切りで全部を含むものに絞る。省略すると全件が対象。'),
+      .describe('題名に含まれる語。空白区切りで全語を含むものに絞る。'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(LIST_CLIPS_LIMIT)
+      .default(LIST_CLIPS_LIMIT)
+      .describe('新しい順で返す件数。'),
+    dismissed: z
+      .boolean()
+      .optional()
+      .describe('falseなら片付けていないもの、trueなら片付けたものだけ。'),
   }),
   read_clip: z.object({
-    clip_ref: z.string().min(1).describe('find_clipsまたはlist_clipsが返したopaqueなclip_ref。'),
+    clip_ref: z.string().min(1).describe('list_clipsまたはfind_clipsが返したclip_ref。'),
   }),
   delete_clip: z.object({
-    clip_ref: z.string().min(1).describe('find_clipsまたはlist_clipsが返したopaqueなclip_ref。'),
+    clip_ref: z.string().min(1).describe('list_clipsまたはfind_clipsが返したclip_ref。'),
   }),
 } as const;
 
 export type CoreToolName = keyof typeof coreToolSchemas;
-
-/**
- * `list_clips`が項目を返す上限（ADR 0031）。ガードではなく機能上限で、有限の寿命を持つ。
- * モデルへ渡す説明文がこの値を名指すので、契約としてここに1つだけ置く。
- */
-export const LIST_CLIPS_LIMIT = 100;
 
 export const coreToolNames = [
   'load_content',
@@ -56,18 +67,14 @@ export const coreToolNames = [
 ] as const satisfies readonly CoreToolName[];
 
 export const coreToolDescriptions: Record<CoreToolName, string> = {
-  load_content:
-    'URLの中身を読み込み、全文とopaqueなloaded_refを返す。保存はしない。リダイレクトは自動で追う。',
+  load_content: 'URLの中身を読み込み、全文とloaded_refを返す。保存はしない。リダイレクトは自動で追う。',
   save_loaded:
-    'load_contentが返したloaded_refの本文snapshotを再取得せずGitHubへ保存する。未発行・期限切れrefは拒否する。body_languageが日本語以外なら、保存の後で本文を日本語へ置き換える翻訳が非同期で走る。渡さないと翻訳しない。',
-  set_clip_dismissed:
-    'D1に実在する保存済みクリップへ「片付けた」印を付ける、または外す。1回につき1件。',
+    'load_contentで読んだ本文をGitHubへ保存する。body_languageに日本語以外を渡すと、保存後に本文が日本語へ翻訳される。',
+  set_clip_dismissed: '保存済みクリップに「片付けた」印を付ける、または外す。クリップは消えない。',
   find_clips:
-    '保存済みクリップを本文から最大5件探し、読取・削除に使うopaqueなclip_refを返す。GitHubのコード検索索引に依存するため、0件は保存されていないことの根拠にならない。題名で在否を確かめるときはlist_clipsを使う。',
+    '保存済みクリップを、本文・題名・URLに出てくる語で最大5件探す。list_clipsで見つからないときに使う。検索索引に依存するため、0件でも保存されていないとは限らない。',
   list_clips:
-    `保存済みクリップをGitHubのファイル一覧から直接引く。検索索引を経由しないので、matchedが返っていれば全件を走査した結果である。title_queryを省略すると全件が対象。matchedが0なら、その題名のクリップは保存されていない。該当が${LIST_CLIPS_LIMIT}件を超えるときは項目を返さずtoo_manyを返すので、語を足して絞る。長い題名はファイル名が255バイトで切り詰められるため、末尾の語では引けないことがある。本文は見ないのでsnippetとgithub_urlは返さない。`,
-  read_clip:
-    'find_clipsまたはlist_clipsが返したclip_refの現在の本文をGitHubから読む。検索snippetだけを本文の根拠にしない。保存時の素性も返す。fetch_completeがfalseなら本文は取り切れていないので、そのつもりで扱う。',
-  delete_clip:
-    'find_clipsまたはlist_clipsが返したclip_refのクリップ1件をGitHubとD1から削除する。Git履歴から復元できる。',
+    '保存済みクリップを探すときに最初に使う。新しい順に返す。題名に語が出ていそうならtitle_queryで絞り、そうでなければ絞らずに取って題名から選ぶ。matchedは条件に合う総数で、0なら保存されていない。foundがmatchedより少なければ続きがあるので、語かdismissedで絞る。',
+  read_clip: 'clip_refのクリップの現在の本文を読む。find_clipsのsnippetだけを内容の根拠にしない。',
+  delete_clip: 'clip_refのクリップ1件を削除する。Git履歴から復元できる。',
 };

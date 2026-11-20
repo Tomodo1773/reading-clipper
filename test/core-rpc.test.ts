@@ -3,6 +3,7 @@ import { CoreMcpEntrypoint, CoreWebEntrypoint } from '../src/core-rpc';
 import { recordClip, setClipDismissed } from '../src/clips';
 import { resetGitHubTokenCache } from '../src/github';
 import { utf8ToBase64 } from '../src/utils';
+import type { Env } from '../src/types';
 import { generatePrivateKeyPem, jsonResponse, makeEnv, resetClips } from './helpers';
 
 let privateKeyPem: string;
@@ -157,7 +158,7 @@ describe('Core Web RPC', () => {
 });
 
 describe('list_clips', () => {
-  function mockTree(fileNames: string[], options: { fail?: boolean } = {}) {
+  function mockTree(fileNames: string[], options: { fail?: boolean; failD1?: boolean } = {}) {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input));
       if (url.pathname.includes('/app/installations/')) {
@@ -172,8 +173,34 @@ describe('list_clips', () => {
       }
       throw new Error(`unexpected request: ${url}`);
     });
-    const env = makeEnv({ GITHUB_APP_PRIVATE_KEY: privateKeyPem });
+    const brokenClips = {
+      prepare() {
+        throw new Error('D1 is unavailable');
+      },
+    } as unknown as D1Database;
+    const env = makeEnv({
+      GITHUB_APP_PRIVATE_KEY: privateKeyPem,
+      ...(options.failD1 ? { CLIPS: brokenClips } : {}),
+    });
     return { env, core: { env } as unknown as CoreMcpEntrypoint };
+  }
+
+  function foundPaths(result: unknown): string[] {
+    const found =
+      result && typeof result === 'object' && 'found' in result && Array.isArray(result.found)
+        ? (result.found as Array<{ path: string }>)
+        : [];
+    return found.map((clip) => clip.path);
+  }
+
+  async function recordAt(env: Env, path: string, clippedAt: string) {
+    await recordClip(env, {
+      path,
+      url: `https://example.com/${encodeURIComponent(path)}`,
+      title: path,
+      excerpt: '',
+      clippedAt,
+    });
   }
 
   function call(core: CoreMcpEntrypoint, args: unknown) {
@@ -232,15 +259,6 @@ describe('list_clips', () => {
     expect(result).not.toHaveProperty('failed_at');
   });
 
-  it('still returns the items when the match count sits exactly on the limit', async () => {
-    // 境界を`>`で判定している。`>=`にすると、ちょうど上限のときに黙って項目が消える。
-    const { core } = mockTree(Array.from({ length: 100 }, (_, index) => `記事${index}.md`));
-    const result = await call(core, {});
-    expect(result).toMatchObject({ matched: 100 });
-    expect('found' in result && Array.isArray(result.found) ? result.found : []).toHaveLength(100);
-    expect(result).not.toHaveProperty('too_many');
-  });
-
   it('breaks a tie on clipped_at by path, so the order never depends on tree order', async () => {
     const { env, core } = mockTree(['ロ.md', 'イ.md']);
     for (const path of ['clips/ロ.md', 'clips/イ.md']) {
@@ -258,9 +276,71 @@ describe('list_clips', () => {
     expect(found.map((clip) => clip.path)).toEqual(['clips/イ.md', 'clips/ロ.md']);
   });
 
-  it('returns the count instead of an arbitrary slice when too many match', async () => {
-    const { core } = mockTree(Array.from({ length: 101 }, (_, index) => `記事${index}.md`));
-    expect(await call(core, {})).toEqual({ found: [], matched: 101, too_many: true });
+  it('returns the newest slice with the full count when more than the limit match', async () => {
+    const names = Array.from({ length: 101 }, (_, index) => `記事${index}.md`);
+    const { env, core } = mockTree(names);
+    // 記事100が最も古い。既定の上限では、それだけが溢れる。
+    for (const [index, name] of names.entries()) {
+      await recordAt(env, `clips/${name}`, new Date(Date.UTC(2026, 0, 1) - index * 60_000).toISOString());
+    }
+
+    const result = await call(core, {});
+    expect(result).toMatchObject({ matched: 101 });
+    expect(result).not.toHaveProperty('too_many');
+    const paths = foundPaths(result);
+    expect(paths).toHaveLength(100);
+    expect(paths[0]).toBe('clips/記事0.md');
+    expect(paths).not.toContain('clips/記事100.md');
+  });
+
+  it('returns only the newest ones when a limit is given', async () => {
+    const { env, core } = mockTree(['古い.md', '中間.md', '新しい.md']);
+    await recordAt(env, 'clips/古い.md', '2026-08-01T00:00:00.000Z');
+    await recordAt(env, 'clips/中間.md', '2026-08-10T00:00:00.000Z');
+    await recordAt(env, 'clips/新しい.md', '2026-08-20T00:00:00.000Z');
+
+    const result = await call(core, { limit: 2 });
+    expect(result).toMatchObject({ matched: 3 });
+    expect(foundPaths(result)).toEqual(['clips/新しい.md', 'clips/中間.md']);
+  });
+
+  it('filters by the dismissed mark, counting a clip D1 never recorded as not dismissed', async () => {
+    const { env, core } = mockTree(['片付けた.md', '読んでいない.md', '台帳に無い記事.md']);
+    await recordAt(env, 'clips/片付けた.md', '2026-08-20T00:00:00.000Z');
+    await recordAt(env, 'clips/読んでいない.md', '2026-08-10T00:00:00.000Z');
+    await setClipDismissed(env, 'clips/片付けた.md', true, '2026-08-21T00:00:00.000Z');
+
+    const open = await call(core, { dismissed: false });
+    expect(open).toMatchObject({ matched: 2 });
+    expect(foundPaths(open)).toEqual(['clips/読んでいない.md', 'clips/台帳に無い記事.md']);
+
+    const done = await call(core, { dismissed: true });
+    expect(done).toMatchObject({ matched: 1 });
+    expect(foundPaths(done)).toEqual(['clips/片付けた.md']);
+  });
+
+  it('still answers a title lookup when D1 is down and every match fits', async () => {
+    const { core } = mockTree(['ロ.md', 'イ.md'], { failD1: true });
+    const result = await call(core, {});
+    expect(result).toMatchObject({ matched: 2 });
+    expect(foundPaths(result)).toEqual(['clips/イ.md', 'clips/ロ.md']);
+  });
+
+  it('still returns the items with D1 down when the match count sits exactly on the limit', async () => {
+    // 境界を`>`で判定している。`>=`にすると、全件を返せるのに失敗を返す。
+    const { core } = mockTree(['ロ.md', 'イ.md'], { failD1: true });
+    const result = await call(core, { limit: 2 });
+    expect(result).toMatchObject({ matched: 2 });
+    expect(foundPaths(result)).toEqual(['clips/イ.md', 'clips/ロ.md']);
+  });
+
+  it('fails instead of claiming an order or a dismissed state it could not read', async () => {
+    const { core } = mockTree(['ロ.md', 'イ.md'], { failD1: true });
+    for (const args of [{ limit: 1 }, { dismissed: false }]) {
+      const result = await call(core, args);
+      expect(result).toEqual({ found: [], failed_at: 'clips' });
+      expect(result).not.toHaveProperty('matched');
+    }
   });
 
   it('omits the count when the tree could not be read, so zero is never implied', async () => {
