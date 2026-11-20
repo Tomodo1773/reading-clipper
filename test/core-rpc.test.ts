@@ -326,6 +326,14 @@ describe('list_clips', () => {
     expect(foundPaths(result)).toEqual(['clips/イ.md', 'clips/ロ.md']);
   });
 
+  it('still returns the items with D1 down when the match count sits exactly on the limit', async () => {
+    // 境界を`>`で判定している。`>=`にすると、全件を返せるのに失敗を返す。
+    const { core } = mockTree(['ロ.md', 'イ.md'], { failD1: true });
+    const result = await call(core, { limit: 2 });
+    expect(result).toMatchObject({ matched: 2 });
+    expect(foundPaths(result)).toEqual(['clips/イ.md', 'clips/ロ.md']);
+  });
+
   it('fails instead of claiming an order or a dismissed state it could not read', async () => {
     const { core } = mockTree(['ロ.md', 'イ.md'], { failD1: true });
     for (const args of [{ limit: 1 }, { dismissed: false }]) {

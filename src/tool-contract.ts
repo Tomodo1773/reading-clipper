@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * `list_clips`が1回に返す件数の上限で、省略時の件数でもある（ADR 0031、ADR 0037）。
- * モデルへ渡すschemaと説明文がこの値を名指すので、契約としてここに1つだけ置く。
+ * モデルへ渡すschemaが上限と既定値の両方にこの値を使うので、契約としてここに1つだけ置く。
  */
 export const LIST_CLIPS_LIMIT = 100;
 
@@ -39,8 +39,8 @@ export const coreToolSchemas = {
       .int()
       .min(1)
       .max(LIST_CLIPS_LIMIT)
-      .optional()
-      .describe(`新しい順で返す件数。省略すると${LIST_CLIPS_LIMIT}。`),
+      .default(LIST_CLIPS_LIMIT)
+      .describe('新しい順で返す件数。'),
     dismissed: z
       .boolean()
       .optional()

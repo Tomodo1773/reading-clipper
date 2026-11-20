@@ -211,6 +211,19 @@ export async function selectClipsByPath(
 }
 
 /**
+ * 台帳の全行から、一覧の並べ替えと絞り込みに要る列だけを読む（ADR 0037）。
+ *
+ * 該当が100件を超えうるので、`selectClipsByPath`のようにパスを`IN`へ並べない。
+ * D1は1クエリに束縛できる値が100個までである。抜粋や画像URLは使わないので読まない。
+ */
+export async function selectClipAnnotations(env: Env): Promise<FoundClip[]> {
+  const { results } = await env.CLIPS.prepare(
+    'SELECT path, title, url, clipped_at AS clippedAt, dismissed_at AS dismissedAt FROM clips',
+  ).all<FoundClip>();
+  return results;
+}
+
+/**
  * 台帳から行ごと消す（ADR 0016）。
  *
  * 片付けの印とは別で、保存そのものを無かったことにする操作の片割れである。

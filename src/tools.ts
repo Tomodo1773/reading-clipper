@@ -5,7 +5,7 @@ import {
   deleteClip,
   type FoundClip,
   recordClip,
-  selectAllClips,
+  selectClipAnnotations,
   selectClipsByPath,
   setClipDismissed,
 } from './clips';
@@ -22,11 +22,7 @@ import {
   searchGitHubCode,
 } from './github';
 import { renderClipMarkdown } from './markdown';
-import {
-  coreToolDescriptions,
-  coreToolSchemas,
-  LIST_CLIPS_LIMIT,
-} from './tool-contract';
+import { coreToolDescriptions, coreToolSchemas } from './tool-contract';
 import type { ClipRefPayload } from './tool-state';
 import { queueTranslation } from './translate';
 import type { Env, FetchedContent } from './types';
@@ -228,11 +224,7 @@ export async function findClipsTool(env: Env, ownerId: string, rawArgs: unknown)
  * 失敗時は`matched`を返さないので、0件と見に行けなかったことが形として別物になる。
  */
 export async function listClipsTool(env: Env, ownerId: string, rawArgs: unknown) {
-  const {
-    title_query: titleQuery,
-    limit = LIST_CLIPS_LIMIT,
-    dismissed,
-  } = coreToolSchemas.list_clips.parse(rawArgs);
+  const { title_query: titleQuery, limit, dismissed } = coreToolSchemas.list_clips.parse(rawArgs);
   let paths: string[];
   try {
     paths = await listGitHubClipFiles(env);
@@ -244,7 +236,7 @@ export async function listClipsTool(env: Env, ownerId: string, rawArgs: unknown)
   // 該当が100件を超えうるので、パスを`IN`へ並べず台帳を1回で読む（ADR 0037）。
   let annotations: Map<string, FoundClip>;
   try {
-    annotations = new Map((await selectAllClips(env)).map((clip) => [clip.path, clip]));
+    annotations = new Map((await selectClipAnnotations(env)).map((clip) => [clip.path, clip]));
   } catch (error) {
     // 台帳なしでは片付け状態も新しさも分からない。絞り込みや上位N件を名乗れないときは
     // 失敗にし、全件をそのまま返せるときだけ注釈なしで返す（ADR 0037）。
