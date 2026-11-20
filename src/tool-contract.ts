@@ -74,9 +74,9 @@ export const coreToolDescriptions: Record<CoreToolName, string> = {
   set_clip_dismissed:
     'D1に実在する保存済みクリップへ「片付けた」印を付ける、または外す。1回につき1件。',
   find_clips:
-    '保存済みクリップを本文から最大5件探し、読取・削除に使うopaqueなclip_refを返す。GitHubのコード検索索引に依存するため、0件は保存されていないことの根拠にならない。題名で在否を確かめるときはlist_clipsを使う。',
+    '保存済みクリップを本文に出てくる語から最大5件探し、読取・削除に使うopaqueなclip_refを返す。題名や新しさで探すときはlist_clipsが先で、これはlist_clipsで見つからないときに使う。GitHubのコード検索索引に依存するため、0件は保存されていないことの根拠にならない。',
   list_clips:
-    `保存済みクリップをGitHubのファイル一覧から直接引き、保存日時の新しい順で返す。検索索引を経由しないので、matchedが返っていれば全件を走査した結果である。matchedはtitle_queryとdismissedで絞った該当数で、foundにはそのうち新しい順の上位limit件が入る。foundがmatchedより少なければ続きがあるので、語を足すかlimitを上げる。matchedが0なら、その条件のクリップは保存されていない。長い題名はファイル名が255バイトで切り詰められるため、末尾の語では引けないことがある。本文は見ないのでsnippetとgithub_urlは返さない。`,
+    `保存済みクリップを探すときに最初に使う。GitHubのファイル一覧から直接引き、保存日時の新しい順で返す。題名の語で探すならtitle_queryを渡す。題名に字面で出ているか分からない話題（英語の題名、言い換え）なら、title_queryを付けずに新しい順で取り、題名から選ぶ。検索索引を経由しないので、matchedが返っていれば全件を走査した結果である。matchedはtitle_queryとdismissedで絞った該当数で、foundにはそのうち新しい順の上位limit件が入る。foundがmatchedより少なければ続きがあるので、語を足すかlimitを上げる。matchedが0なら、その条件のクリップは保存されていない。長い題名はファイル名が255バイトで切り詰められるため、末尾の語では引けないことがある。本文は見ないのでsnippetとgithub_urlは返さない。`,
   read_clip:
     'find_clipsまたはlist_clipsが返したclip_refの現在の本文をGitHubから読む。検索snippetだけを本文の根拠にしない。保存時の素性も返す。fetch_completeがfalseなら本文は取り切れていないので、そのつもりで扱う。',
   delete_clip:
