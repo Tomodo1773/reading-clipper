@@ -140,7 +140,7 @@ async function saveLoaded(
   return { saved: true as const, path, github_url: saved.htmlUrl, title: content.title };
 }
 
-function refFailure(ref: string, error: 'unknown_ref' | 'wrong_kind' | 'expired') {
+function refFailure(ref: string, error: 'unknown_ref') {
   return { ref, ref_error: error };
 }
 

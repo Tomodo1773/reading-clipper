@@ -1,5 +1,4 @@
 import { DurableObject } from 'cloudflare:workers';
-import { alarmTime, expiresAt } from './retention';
 import type { Env, FetchedContent } from './types';
 
 export interface ClipRefPayload {
@@ -7,127 +6,86 @@ export interface ClipRefPayload {
   title: string;
 }
 
-export type ToolRefKind = 'loaded' | 'clip';
-export type ToolRefPayload = FetchedContent | ClipRefPayload;
-
 export type ResolveRefResult<T> =
   | { ok: true; payload: T }
-  | { ok: false; error: 'unknown_ref' | 'wrong_kind' | 'expired' };
+  | { ok: false; error: 'unknown_ref' };
 
-interface StoredRef extends Record<string, string> {
-  kind: ToolRefKind;
-  payload_json: string;
-  expires_at: string;
-}
-
-/** ownerごとのopaque tool refだけを保持する（ADR 0022）。 */
+/**
+ * ownerごとのtool ref（ADR 0038）。
+ *
+ * 取得した本文はURLごと、保存済みクリップはパスごとに1行で、refはその行に固定で付く。
+ * 同じURLを読み直せば本文だけ差し替わり、refは変わらない。期限は持たない。
+ * 2つの表を分けているのは、取得のrefで削除へ、検索のrefで保存へ届かせないためである。
+ */
 export class ToolState extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS tool_refs (
-           ref TEXT PRIMARY KEY,
-           kind TEXT NOT NULL,
-           payload_json TEXT NOT NULL,
-           created_at TEXT NOT NULL,
-           expires_at TEXT NOT NULL
+        `CREATE TABLE IF NOT EXISTS loaded (
+           url TEXT PRIMARY KEY,
+           ref TEXT NOT NULL UNIQUE,
+           content_json TEXT NOT NULL
          )`,
       );
       ctx.storage.sql.exec(
-        'CREATE INDEX IF NOT EXISTS tool_refs_expires_at ON tool_refs (expires_at)',
+        `CREATE TABLE IF NOT EXISTS clips (
+           path TEXT PRIMARY KEY,
+           ref TEXT NOT NULL UNIQUE,
+           title TEXT NOT NULL
+         )`,
       );
-      await this.deleteExpiredAndSchedule();
     });
   }
 
-  async putLoaded(content: FetchedContent, createdAt = new Date().toISOString()): Promise<string> {
-    const [ref] = await this.put('loaded', [content], createdAt);
-    return ref as string;
+  putLoaded(content: FetchedContent): string {
+    return this.ctx.storage.sql
+      .exec<{ ref: string }>(
+        `INSERT INTO loaded (url, ref, content_json) VALUES (?, ?, ?)
+         ON CONFLICT (url) DO UPDATE SET content_json = excluded.content_json
+         RETURNING ref`,
+        content.canonicalUrl,
+        crypto.randomUUID(),
+        JSON.stringify(content),
+      )
+      .one().ref;
   }
 
   /**
-   * 候補のぶんだけrefをまとめて発行する。1件ずつ発行する口は持たない。
+   * 候補のぶんだけrefをまとめて返す。1件ずつの口は持たない。
    *
    * 検索も一覧も複数の候補を一度に返すため、単発の口を残すと呼び出し側が件数ぶんの
    * RPC往復を作れてしまう（ADR 0031）。
    */
-  async putClips(
-    payloads: ClipRefPayload[],
-    createdAt = new Date().toISOString(),
-  ): Promise<string[]> {
-    return this.put('clip', payloads, createdAt);
+  putClips(payloads: ClipRefPayload[]): string[] {
+    return payloads.map(
+      ({ path, title }) =>
+        this.ctx.storage.sql
+          .exec<{ ref: string }>(
+            `INSERT INTO clips (path, ref, title) VALUES (?, ?, ?)
+             ON CONFLICT (path) DO UPDATE SET title = excluded.title
+             RETURNING ref`,
+            path,
+            crypto.randomUUID(),
+            title,
+          )
+          .one().ref,
+    );
   }
 
-  resolveLoaded(ref: string, now = new Date().toISOString()): ResolveRefResult<FetchedContent> {
-    return this.resolve(ref, 'loaded', now);
-  }
-
-  resolveClip(ref: string, now = new Date().toISOString()): ResolveRefResult<ClipRefPayload> {
-    return this.resolve(ref, 'clip', now);
-  }
-
-  async alarm(): Promise<void> {
-    await this.deleteExpiredAndSchedule();
-  }
-
-  private async put(
-    kind: ToolRefKind,
-    payloads: ToolRefPayload[],
-    createdAt: string,
-  ): Promise<string[]> {
-    const expires = expiresAt(createdAt);
-    const refs = payloads.map((payload) => {
-      const ref = crypto.randomUUID();
-      this.ctx.storage.sql.exec(
-        `INSERT INTO tool_refs (ref, kind, payload_json, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        ref,
-        kind,
-        JSON.stringify(payload),
-        createdAt,
-        expires,
-      );
-      return ref;
-    });
-    if (refs.length > 0) await this.scheduleNextAlarm();
-    return refs;
-  }
-
-  private resolve<T>(ref: string, kind: ToolRefKind, now: string): ResolveRefResult<T> {
+  resolveLoaded(ref: string): ResolveRefResult<FetchedContent> {
     const row = this.ctx.storage.sql
-      .exec<StoredRef>(
-        'SELECT kind, payload_json, expires_at FROM tool_refs WHERE ref = ?',
-        ref,
-      )
+      .exec<{ content_json: string }>('SELECT content_json FROM loaded WHERE ref = ?', ref)
       .toArray()[0];
     if (!row) return { ok: false, error: 'unknown_ref' };
-    if (row.kind !== kind) return { ok: false, error: 'wrong_kind' };
-    if (row.expires_at <= now) {
-      this.ctx.storage.sql.exec('DELETE FROM tool_refs WHERE ref = ?', ref);
-      this.ctx.waitUntil(this.scheduleNextAlarm());
-      return { ok: false, error: 'expired' };
-    }
-    return { ok: true, payload: JSON.parse(row.payload_json) as T };
+    return { ok: true, payload: JSON.parse(row.content_json) as FetchedContent };
   }
 
-  private async deleteExpiredAndSchedule(now = new Date().toISOString()): Promise<void> {
-    this.ctx.storage.sql.exec('DELETE FROM tool_refs WHERE expires_at <= ?', now);
-    await this.scheduleNextAlarm();
-  }
-
-  private async scheduleNextAlarm(): Promise<void> {
-    const next = this.ctx.storage.sql
-      .exec<{ expires_at: string }>(
-        'SELECT expires_at FROM tool_refs ORDER BY expires_at LIMIT 1',
-      )
-      .toArray()[0]?.expires_at;
-    const current = await this.ctx.storage.getAlarm();
-    if (!next) {
-      if (current !== null) await this.ctx.storage.deleteAlarm();
-      return;
-    }
-    const target = alarmTime(next);
-    if (current === null || current !== target) await this.ctx.storage.setAlarm(target);
+  resolveClip(ref: string): ResolveRefResult<ClipRefPayload> {
+    const row = this.ctx.storage.sql
+      .exec<{ path: string; title: string }>('SELECT path, title FROM clips WHERE ref = ?', ref)
+      .toArray()[0];
+    if (!row) return { ok: false, error: 'unknown_ref' };
+    return { ok: true, payload: { path: row.path, title: row.title } };
   }
 }

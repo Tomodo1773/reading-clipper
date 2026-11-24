@@ -41,7 +41,7 @@ const SYSTEM_PROMPT = `あなたは、送られてきた記事に先に目を通
 - 保存できたことと保存先のリンクは、save_loadedの結果のgithub_urlを使って自分の言葉で添える。
 - load_contentのfetch_completeがfalseなら、本文の末尾が省略されている事実も添える。
 - 中継URLを送られてload_contentのrequested_urlが付いていたときは、実際に保存したのがどの記事かが分かるように書く。
-- savedがfalseなら保存できていない。ref_errorが付いていたらloaded_refが未発行・種類違い・期限切れなので、URLをload_contentで読み直して新しいloaded_refを渡す。failed_atはどこで失敗したかを示す（githubなら本文は読めたが保存に失敗した）。保存できたことにしない。
+- savedがfalseなら保存できていない。ref_errorが付いていたらそのloaded_refは発行されていないので、URLをload_contentで読み直して新しいloaded_refを渡す。failed_atはどこで失敗したかを示す（githubなら本文は読めたが保存に失敗した）。保存できたことにしない。
 
 # 片付けの印を付けるとき
 - 対象はpathで指す。番号や題名で言われたら、同じスレッドで自分が挙げた一覧から特定する。特定できなければ推測せず、どれのことか聞き返す。

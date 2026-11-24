@@ -3,6 +3,8 @@
 - ステータス: Accepted（実装済み）
 - 日付: 2026-08-24
 
+> 更新: tool refの90日保持とAlarm cleanup、取得ごとの新規ref発行は[ADR 0038](0038-stable-tool-refs-without-expiry.md)で置き換えた。refは取得した本文ならURLごと、クリップならパスごとに固定し、期限を持たない。会話履歴の90日保持はこのADRのまま。
+
 ## 背景
 
 現在の`load_content`と`save_loaded`、`find_clips`と`read_clip` / `delete_clip`は、1回の`generateText()`中に作られるJavaScriptの`Map`を共有して成立している。同じWorker invocation内では、外側のWorkerやMCP transportがstatelessでもMapは消えない。
