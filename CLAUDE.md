@@ -23,7 +23,7 @@
 | `src/tool-contract.ts` | BotとMCP Edgeで共有するツール名・schema・説明 |
 | `src/tools.ts` | 共通ツール処理とAI SDK adapter（読む／保存する／一覧する／探す／消す） |
 | `src/core-rpc.ts` / `src/mcp-edge.ts` / `src/web.ts` | Service Binding RPCと2つの公開境界。MCPは`/mcp`だけ、Webは閲覧ページとアイコンを持ちます。境界は受け渡しだけで、画面はCoreが組み立てます（ADR 0036）。Web境界はAccess policyを認証の正本とし、アプリ内で本人を照合しません |
-| `src/tool-state.ts` / `src/retention.ts` | owner単位のopaque refと90日Alarm cleanup |
+| `src/tool-state.ts` | owner単位のopaque ref。取得した本文はURLごと、クリップはパスごとに固定のrefを持ち、期限は無い（ADR 0038） |
 | `src/thread.ts` | Durable Object。スレッド単位の会話履歴の読み書きだけを持ちます |
 | `src/fetchers.ts` | URL種別ごとの本文取得（Qiita / Zenn / X / arXiv / Speaker Deck / ドクセル / Firecrawl）。サイト固有の変換ルールもここに置きます |
 | `src/html-markdown.ts` | 意味づけの残るHTMLをMarkdownへ戻す共有の変換器。**特定のサイトを知りません**。サイト固有の要素は呼び出し側からルールとして渡します |

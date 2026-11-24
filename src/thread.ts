@@ -1,6 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
-import { alarmTime, expiresAt } from './retention';
 import type { Env, SavedClip } from './types';
+
+/** Slack無料プランで会話が見える期間に合わせる（ADR 0022）。 */
+const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+function expiresAt(at: string): string {
+  return new Date(Date.parse(at) + RETENTION_MS).toISOString();
+}
 
 /** Slackスレッド1本ぶんの会話。モデル呼び出しはQueue consumer側に残す。 */
 export class ThreadAgent extends DurableObject<Env> {
@@ -157,7 +163,7 @@ export class ThreadAgent extends DurableObject<Env> {
       if (current !== null) await this.ctx.storage.deleteAlarm();
       return;
     }
-    const target = alarmTime(next);
+    const target = Date.parse(next);
     if (current === null || current !== target) await this.ctx.storage.setAlarm(target);
   }
 }
