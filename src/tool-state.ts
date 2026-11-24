@@ -6,10 +6,6 @@ export interface ClipRefPayload {
   title: string;
 }
 
-export type ResolveRefResult<T> =
-  | { ok: true; payload: T }
-  | { ok: false; error: 'unknown_ref' };
-
 /**
  * ownerごとのtool ref（ADR 0038）。
  *
@@ -73,19 +69,17 @@ export class ToolState extends DurableObject<Env> {
     );
   }
 
-  resolveLoaded(ref: string): ResolveRefResult<FetchedContent> {
+  resolveLoaded(ref: string): FetchedContent | null {
     const row = this.ctx.storage.sql
       .exec<{ content_json: string }>('SELECT content_json FROM loaded WHERE ref = ?', ref)
       .toArray()[0];
-    if (!row) return { ok: false, error: 'unknown_ref' };
-    return { ok: true, payload: JSON.parse(row.content_json) as FetchedContent };
+    return row ? (JSON.parse(row.content_json) as FetchedContent) : null;
   }
 
-  resolveClip(ref: string): ResolveRefResult<ClipRefPayload> {
+  resolveClip(ref: string): ClipRefPayload | null {
     const row = this.ctx.storage.sql
       .exec<{ path: string; title: string }>('SELECT path, title FROM clips WHERE ref = ?', ref)
       .toArray()[0];
-    if (!row) return { ok: false, error: 'unknown_ref' };
-    return { ok: true, payload: { path: row.path, title: row.title } };
+    return row ? { path: row.path, title: row.title } : null;
   }
 }

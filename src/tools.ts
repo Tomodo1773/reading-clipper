@@ -140,8 +140,8 @@ async function saveLoaded(
   return { saved: true as const, path, github_url: saved.htmlUrl, title: content.title };
 }
 
-function refFailure(ref: string, error: 'unknown_ref') {
-  return { ref, ref_error: error };
+function refFailure(ref: string) {
+  return { ref, ref_error: 'unknown_ref' as const };
 }
 
 export async function loadContentTool(
@@ -175,10 +175,10 @@ export async function saveLoadedTool(env: Env, ownerId: string, receivedAt: stri
   const { loaded_ref: ref, body_language: bodyLanguage } =
     coreToolSchemas.save_loaded.parse(rawArgs);
   const state = env.TOOL_STATE.get(env.TOOL_STATE.idFromName(ownerId));
-  const resolved = await state.resolveLoaded(ref);
-  if (!resolved.ok) return { saved: false as const, ...refFailure(ref, resolved.error) };
+  const content = await state.resolveLoaded(ref);
+  if (!content) return { saved: false as const, ...refFailure(ref) };
   try {
-    return await saveLoaded(env, resolved.payload, receivedAt, bodyLanguage);
+    return await saveLoaded(env, content, receivedAt, bodyLanguage);
   } catch (error) {
     return { saved: false as const, failed_at: logFailure(error, 'github', 'save_loaded') };
   }
@@ -259,9 +259,8 @@ export async function listClipsTool(env: Env, ownerId: string, rawArgs: unknown)
 export async function readClipTool(env: Env, ownerId: string, rawArgs: unknown) {
   const { clip_ref: ref } = coreToolSchemas.read_clip.parse(rawArgs);
   const state = env.TOOL_STATE.get(env.TOOL_STATE.idFromName(ownerId));
-  const resolved = await state.resolveClip(ref);
-  if (!resolved.ok) return { found: false, ...refFailure(ref, resolved.error) };
-  const clip = resolved.payload;
+  const clip = await state.resolveClip(ref);
+  if (!clip) return { found: false, ...refFailure(ref) };
   try {
     const file = await getGitHubTextFile(env, clip.path);
     if (!file) {
@@ -292,9 +291,8 @@ export async function readClipTool(env: Env, ownerId: string, rawArgs: unknown) 
 export async function deleteClipTool(env: Env, ownerId: string, rawArgs: unknown) {
   const { clip_ref: ref } = coreToolSchemas.delete_clip.parse(rawArgs);
   const state = env.TOOL_STATE.get(env.TOOL_STATE.idFromName(ownerId));
-  const resolved = await state.resolveClip(ref);
-  if (!resolved.ok) return { deleted: false, ...refFailure(ref, resolved.error) };
-  const clip = resolved.payload;
+  const clip = await state.resolveClip(ref);
+  if (!clip) return { deleted: false, ...refFailure(ref) };
   let removed: boolean;
   try {
     removed = await deleteGitHubFile(env, clip.path);

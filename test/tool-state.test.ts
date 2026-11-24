@@ -22,11 +22,8 @@ describe('ToolState', () => {
 
     expect(ref).not.toContain('example.com');
     expect(ref).not.toContain('秘密');
-    expect(await alice.resolveLoaded(ref)).toEqual({ ok: true, payload: content });
-    expect(await state('tool-state-bob').resolveLoaded(ref)).toEqual({
-      ok: false,
-      error: 'unknown_ref',
-    });
+    expect(await alice.resolveLoaded(ref)).toEqual(content);
+    expect(await state('tool-state-bob').resolveLoaded(ref)).toBeNull();
   });
 
   it('keeps one ref per URL and replaces the body when the URL is loaded again', async () => {
@@ -35,7 +32,7 @@ describe('ToolState', () => {
     const reloaded = { ...content, markdown: '更新された本文' };
 
     expect(await stub.putLoaded(reloaded)).toBe(first);
-    expect(await stub.resolveLoaded(first)).toEqual({ ok: true, payload: reloaded });
+    expect(await stub.resolveLoaded(first)).toEqual(reloaded);
     expect(await stub.putLoaded({ ...content, canonicalUrl: 'https://example.com/other' })).not.toBe(
       first,
     );
@@ -51,13 +48,13 @@ describe('ToolState', () => {
     const refs = await stub.putClips(payloads);
     expect(refs).toHaveLength(2);
     expect(new Set(refs).size).toBe(2);
-    expect(await stub.resolveClip(refs[0]!)).toEqual({ ok: true, payload: payloads[0] });
-    expect(await stub.resolveClip(refs[1]!)).toEqual({ ok: true, payload: payloads[1] });
+    expect(await stub.resolveClip(refs[0]!)).toEqual(payloads[0]);
+    expect(await stub.resolveClip(refs[1]!)).toEqual(payloads[1]);
 
     // 題名は最新の台帳に合わせるが、同じパスなら同じrefを返す。
     const renamed = { path: 'clips/一件目.md', title: '一件目（改題）' };
     expect(await stub.putClips([renamed])).toEqual([refs[0]]);
-    expect(await stub.resolveClip(refs[0]!)).toEqual({ ok: true, payload: renamed });
+    expect(await stub.resolveClip(refs[0]!)).toEqual(renamed);
     expect(await stub.putClips([])).toEqual([]);
   });
 
@@ -67,7 +64,7 @@ describe('ToolState', () => {
     const loadedRef = await stub.putLoaded(content);
     const [clipRef] = await stub.putClips([{ path: 'clips/秘密の題名.md', title: '秘密の題名' }]);
 
-    expect(await stub.resolveClip(loadedRef)).toEqual({ ok: false, error: 'unknown_ref' });
-    expect(await stub.resolveLoaded(clipRef!)).toEqual({ ok: false, error: 'unknown_ref' });
+    expect(await stub.resolveClip(loadedRef)).toBeNull();
+    expect(await stub.resolveLoaded(clipRef!)).toBeNull();
   });
 });
