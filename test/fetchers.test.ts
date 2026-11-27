@@ -134,6 +134,123 @@ describe('source fetchers', () => {
     expect(result.markdown).not.toContain('記事を公開しました');
   });
 
+  it('asks X for the referenced Posts and media in the same request', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(jsonResponse({ data: { id: '123', text: '本文', author_id: 'u1' } }));
+    await fetchContent('https://x.com/alice/status/123', makeEnv());
+    expect(spy).toHaveBeenCalledTimes(1);
+    const requested = new URL(String(spy.mock.calls[0]?.[0]));
+    expect(requested.searchParams.get('expansions')?.split(',')).toEqual(
+      expect.arrayContaining([
+        'author_id',
+        'referenced_tweets.id',
+        'referenced_tweets.id.author_id',
+        'attachments.media_keys',
+      ]),
+    );
+    expect(requested.searchParams.get('media.fields')?.split(',')).toEqual(
+      expect.arrayContaining(['url', 'preview_image_url', 'alt_text']),
+    );
+  });
+
+  it('renders the replied-to Post, the body, media and the quoted Post in reading order', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        data: {
+          id: '123',
+          text: 'これ良かった https://t.co/link https://t.co/quote https://t.co/pic',
+          author_id: 'u1',
+          entities: {
+            urls: [
+              { url: 'https://t.co/link', expanded_url: 'https://example.com/post' },
+              { url: 'https://t.co/quote', expanded_url: 'https://x.com/bob/status/456' },
+              {
+                url: 'https://t.co/pic',
+                expanded_url: 'https://x.com/alice/status/123/photo/1',
+                media_key: '3_1',
+              },
+            ],
+          },
+          referenced_tweets: [
+            { type: 'replied_to', id: '100' },
+            { type: 'quoted', id: '456' },
+          ],
+          attachments: { media_keys: ['3_1', '7_1'] },
+        },
+        includes: {
+          users: [
+            { id: 'u1', name: 'Alice', username: 'alice' },
+            { id: 'u2', name: 'Bob', username: 'bob' },
+          ],
+          tweets: [
+            { id: '100', text: '元の話', author_id: 'u1' },
+            { id: '456', text: '引用された話', author_id: 'u2' },
+          ],
+          media: [
+            { media_key: '3_1', type: 'photo', url: 'https://pbs.example/a.jpg', alt_text: '構成図 [v2]' },
+            { media_key: '7_1', type: 'video', preview_image_url: 'https://pbs.example/v.jpg' },
+          ],
+        },
+      }),
+    );
+    const result = await fetchContent('https://x.com/alice/status/123', makeEnv());
+    expect(result.markdown).toBe(
+      [
+        '# Post by @alice',
+        'Alice @alice',
+        '> 返信先: Alice @alice\n>\n> 元の話\n>\n> https://x.com/alice/status/100',
+        'これ良かった https://example.com/post https://x.com/bob/status/456',
+        '![構成図 v2](https://pbs.example/a.jpg)',
+        '![動画のサムネイル](https://pbs.example/v.jpg)',
+        '> 引用: Bob @bob\n>\n> 引用された話\n>\n> https://x.com/bob/status/456',
+      ].join('\n\n'),
+    );
+  });
+
+  it('expands URLs in a long Post from its own entities and skips a referenced Post X did not return', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        data: {
+          id: '123',
+          text: '短縮版 https://t.co/short',
+          author_id: 'u1',
+          note_tweet: {
+            text: '長い本文 https://t.co/long',
+            entities: { urls: [{ url: 'https://t.co/long', expanded_url: 'https://example.com/long' }] },
+          },
+          referenced_tweets: [{ type: 'quoted', id: '999' }],
+        },
+        includes: { users: [{ id: 'u1', name: 'Alice', username: 'alice' }] },
+        errors: [{ resource_id: '999', title: 'Not Found Error' }],
+      }),
+    );
+    const result = await fetchContent('https://x.com/alice/status/123', makeEnv());
+    expect(result.markdown).toBe('# Post by @alice\n\nAlice @alice\n\n長い本文 https://example.com/long');
+  });
+
+  it('keeps a Post that has only an image', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        data: {
+          id: '123',
+          text: 'https://t.co/pic',
+          author_id: 'u1',
+          entities: {
+            urls: [{ url: 'https://t.co/pic', expanded_url: 'https://x.com/alice/status/123/photo/1' }],
+          },
+          attachments: { media_keys: ['3_1'] },
+        },
+        includes: {
+          users: [{ id: 'u1', name: 'Alice', username: 'alice' }],
+          media: [{ media_key: '3_1', type: 'photo', url: 'https://pbs.example/a.jpg' }],
+        },
+      }),
+    );
+    const result = await fetchContent('https://x.com/alice/status/123', makeEnv());
+    expect(result.markdown).toBe('# Post by @alice\n\nAlice @alice\n\n![画像](https://pbs.example/a.jpg)');
+  });
+
   it('uses Firecrawl Markdown for general pages', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
