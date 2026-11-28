@@ -183,13 +183,94 @@ function articleBody(article: Record<string, unknown> | undefined): string | und
   return undefined;
 }
 
+/**
+ * Post lookupに付ける項目。引用・返信先のPostと添付メディアは`expansions`で同じ1回の応答に入れる。
+ *
+ * X APIの従量課金は応答に入ったリソースの数で決まる。引用や返信先があれば、Post 1件と
+ * その投稿者1人ぶん増える（同じUTC日のうちに同じリソースを取り直しても重複しては課金されない）。
+ *
+ * 本人の連投（スレッド）は取らない。検索APIが要り、返った件数ぶん課金され、他人の返信も混ざる。
+ */
+const X_LOOKUP_PARAMS: Record<string, string> = {
+  'tweet.fields': 'article,note_tweet,author_id,created_at,entities,referenced_tweets,attachments',
+  expansions: 'author_id,referenced_tweets.id,referenced_tweets.id.author_id,attachments.media_keys',
+  'user.fields': 'name,username',
+  'media.fields': 'type,url,preview_image_url,alt_text',
+};
+
+/** 本文と一緒に並べる参照Post。返信先は本文の前、引用は後ろに置く。 */
+const X_REFERENCE_LABELS: Record<string, string> = { replied_to: '返信先', quoted: '引用' };
+
+function records(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(asRecord).filter((record): record is Record<string, unknown> => Boolean(record));
+}
+
+function byField(values: unknown, field: string): Map<string, Record<string, unknown>> {
+  const map = new Map<string, Record<string, unknown>>();
+  for (const record of records(values)) {
+    const key = stringField(record, field);
+    if (key) map.set(key, record);
+  }
+  return map;
+}
+
+/**
+ * 本文中のt.coを展開する。展開しないと、紹介ポストのリンク先をどこへ読みに行けばいいか
+ * 本文だけからは分からない。添付メディアを指すリンクは本文の末尾に付くだけなので消す。
+ * メディアは`xMediaLines`が別に並べる。
+ */
+function expandXUrls(text: string, entities: Record<string, unknown> | undefined): string {
+  let expanded = text;
+  for (const entity of records(entities?.urls)) {
+    const shortUrl = stringField(entity, 'url');
+    if (!shortUrl) continue;
+    const target = stringField(entity, 'unwound_url') ?? stringField(entity, 'expanded_url');
+    const isMedia =
+      Boolean(stringField(entity, 'media_key')) || /\/(?:photo|video)\/\d+$/.test(target ?? '');
+    expanded = expanded.split(shortUrl).join(isMedia ? '' : (target ?? shortUrl));
+  }
+  return expanded.trim();
+}
+
+/** X Article、長文ポスト、通常の本文の順に探す。URLの展開は本文と同じ出どころの`entities`で行う。 */
+function xPostText(post: Record<string, unknown>): string {
+  const article = articleBody(asRecord(post.article));
+  if (article) return article;
+  const note = asRecord(post.note_tweet);
+  const noteText = stringField(note, 'text');
+  if (noteText) return expandXUrls(noteText, asRecord(note?.entities));
+  return expandXUrls(stringField(post, 'text') ?? '', asRecord(post.entities));
+}
+
+function xAttribution(user: Record<string, unknown> | undefined): string {
+  const username = stringField(user, 'username');
+  return [stringField(user, 'name'), username ? `@${username}` : undefined].filter(Boolean).join(' ');
+}
+
+/** 画像は代替テキストを、動画とGIFはサムネイルを残す。代替テキストがあれば、それが一番の手がかりになる。 */
+function xMediaLines(post: Record<string, unknown>, media: Map<string, Record<string, unknown>>): string[] {
+  const keys = asRecord(post.attachments)?.media_keys;
+  if (!Array.isArray(keys)) return [];
+  return keys.flatMap((key) => {
+    const item = typeof key === 'string' ? media.get(key) : undefined;
+    const alt = stringField(item, 'alt_text')?.replace(/[[\]\s]+/g, ' ').trim();
+    if (stringField(item, 'type') === 'photo') {
+      const src = stringField(item, 'url');
+      return src ? [`![${alt || '画像'}](${src})`] : [];
+    }
+    const preview = stringField(item, 'preview_image_url');
+    if (!preview) return [];
+    const kind = stringField(item, 'type') === 'video' ? '動画' : 'GIF';
+    return [`![${kind}のサムネイル${alt ? `: ${alt}` : ''}](${preview})`];
+  });
+}
+
 async function fetchX(url: URL, env: Env): Promise<FetchedBody> {
   const postId = extractXPostId(url);
   if (!postId) throw new ClipError('X Post ID was not found', 'validation', false);
   const endpoint = new URL(`https://api.x.com/2/tweets/${postId}`);
-  endpoint.searchParams.set('tweet.fields', 'article,note_tweet,author_id,created_at');
-  endpoint.searchParams.set('expansions', 'author_id');
-  endpoint.searchParams.set('user.fields', 'name,username');
+  for (const [name, value] of Object.entries(X_LOOKUP_PARAMS)) endpoint.searchParams.set(name, value);
   const response = await fetchWithTimeout(
     endpoint,
     { headers: { authorization: `Bearer ${env.X_BEARER_TOKEN}` } },
@@ -201,22 +282,39 @@ async function fetchX(url: URL, env: Env): Promise<FetchedBody> {
   const data = asRecord(root?.data);
   if (!data) throw new ClipError('X API response did not contain a Post', 'fetch', false);
 
-  const article = asRecord(data.article);
-  const noteTweet = asRecord(data.note_tweet);
-  const body = articleBody(article) ?? stringField(noteTweet, 'text') ?? stringField(data, 'text');
-  if (!body) throw new ClipError('X Post body was empty', 'fetch', false);
-
   const includes = asRecord(root?.includes);
-  const users = Array.isArray(includes?.users) ? includes.users : [];
-  const authorId = stringField(data, 'author_id');
-  const author = users.map(asRecord).find((user) => stringField(user, 'id') === authorId);
+  const users = byField(includes?.users, 'id');
+  const posts = byField(includes?.tweets, 'id');
+  const media = byField(includes?.media, 'media_key');
+
+  // 削除・非公開になった参照Postは`includes`に入らず`errors`へ回るので、黙って飛ばす。
+  const referenceBlock = (type: string): string[] =>
+    records(data.referenced_tweets)
+      .filter((ref) => stringField(ref, 'type') === type)
+      .flatMap((ref) => {
+        const post = posts.get(stringField(ref, 'id') ?? '');
+        if (!post) return [];
+        const user = users.get(stringField(post, 'author_id') ?? '');
+        const link = `https://x.com/${stringField(user, 'username') ?? 'i/web'}/status/${stringField(post, 'id')}`;
+        const lines = [`${X_REFERENCE_LABELS[type]}: ${xAttribution(user) || link}`, xPostText(post), link];
+        return [prefixLines(lines.filter(Boolean).join('\n\n'), '> ')];
+      });
+
+  const body = [
+    ...referenceBlock('replied_to'),
+    xPostText(data),
+    ...xMediaLines(data, media),
+    ...referenceBlock('quoted'),
+  ].filter(Boolean);
+  if (body.length === 0) throw new ClipError('X Post body was empty', 'fetch', false);
+
+  const article = asRecord(data.article);
+  const author = users.get(stringField(data, 'author_id') ?? '');
   const username = stringField(author, 'username');
   const displayName = stringField(author, 'name');
   const title = stringField(article, 'title') ?? stringField(data, 'article_title') ?? `Post by @${username ?? 'unknown'}`;
-  const attribution = [displayName, username ? `@${username}` : undefined]
-    .filter(Boolean)
-    .join(' ');
-  const markdown = `# ${title}\n\n${attribution ? `${attribution}\n\n` : ''}${body}`;
+  const attribution = xAttribution(author);
+  const markdown = `# ${title}\n\n${attribution ? `${attribution}\n\n` : ''}${body.join('\n\n')}`;
 
   return finalize({
     source: 'x',

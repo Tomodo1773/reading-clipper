@@ -8,7 +8,7 @@ export const LIST_CLIPS_LIMIT = 100;
 
 /** BotとMCP Edgeが共有する、transport非依存のtool contract。 */
 export const coreToolSchemas = {
-  load_content: z.object({ url: z.string().url().describe('読み込む記事のHTTP(S) URL。') }),
+  load_content: z.object({ url: z.string().url().describe('読み込むHTTP(S) URL。') }),
   save_loaded: z.object({
     loaded_ref: z.string().min(1).describe('load_contentが返したloaded_ref。'),
     body_language: z
@@ -67,7 +67,8 @@ export const coreToolNames = [
 ] as const satisfies readonly CoreToolName[];
 
 export const coreToolDescriptions: Record<CoreToolName, string> = {
-  load_content: 'URLの中身を読み込み、全文とloaded_refを返す。保存はしない。リダイレクトは自動で追う。',
+  load_content:
+    'URLの中身を読み込み、全文をMarkdownで返す。保存はしない。保存するときは、返ったloaded_refをsave_loadedへ渡す。XのポストのURLもこのツールで読む。X APIで取るのでログインは要らず、引用ポストと画像の代替テキストまで入る。リダイレクトは自動で追う。',
   save_loaded:
     'load_contentで読んだ本文をGitHubへ保存する。body_languageに日本語以外を渡すと、保存後に本文が日本語へ翻訳される。',
   set_clip_dismissed: '保存済みクリップに「片付けた」印を付ける、または外す。クリップは消えない。',
